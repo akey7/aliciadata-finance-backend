@@ -152,6 +152,11 @@ def test_interval_must_divide_the_scored_days():
         run(rebalance_interval=7)
 
 
+def test_one_scored_day_is_too_few_for_a_volatility():
+    with pytest.raises(ValueError, match="at least 2 scored days"):
+        run(make_prices(TRAINING_RETURNS + 2), evaluation_days=1, rebalance_interval=1)
+
+
 def test_real_optimizer_gives_feasible_target_weights():
     result = run()
     weights = result.max_sharpe.target_weights
@@ -351,12 +356,28 @@ def test_max_drawdown_is_zero_when_wealth_only_rises():
     assert performance_metrics(np.array([1.0, 1.1, 1.2])).max_drawdown == 0.0
 
 
+def test_annualized_volatility_is_the_sample_std_times_root_252():
+    # Returns of +10 % and -10 %: the sample variance is 0.02 (ddof = 1).
+    wealth = np.array([1.0, 1.1, 0.99])
+    assert performance_metrics(wealth).annualized_volatility == pytest.approx(
+        np.sqrt(0.02 * 252)
+    )
+
+
+def test_annualized_volatility_is_zero_for_constant_returns():
+    wealth = wealth_index(np.full(10, 0.001))
+    assert performance_metrics(wealth).annualized_volatility == pytest.approx(0.0, abs=1e-12)
+
+
 def test_result_metrics_come_from_the_wealth_series():
     result = run()
     for path in (result.max_sharpe, result.equal_weight):
         assert path.wealth[0] == 1.0
         assert path.wealth == pytest.approx(wealth_index(path.daily_returns))
         assert path.metrics == performance_metrics(path.wealth)
+        assert path.metrics.annualized_volatility == pytest.approx(
+            np.std(path.daily_returns, ddof=1) * np.sqrt(252)
+        )
 
 
 # The fallback
@@ -526,6 +547,14 @@ def test_invariants_catch_metrics_that_differ_from_the_wealth():
         check_backtest_invariants(dataclasses.replace(result, max_sharpe=path))
 
 
+def test_invariants_catch_a_volatility_that_differs_from_the_wealth():
+    result = run(optimizer=fixed_optimizer)
+    metrics = dataclasses.replace(result.equal_weight.metrics, annualized_volatility=0.0)
+    path = dataclasses.replace(result.equal_weight, metrics=metrics)
+    with pytest.raises(InvariantError, match="metrics"):
+        check_backtest_invariants(dataclasses.replace(result, equal_weight=path))
+
+
 # The written files
 
 
@@ -653,6 +682,11 @@ def test_metadata_metrics_are_in_percent(written):
         assert written_metrics["cagr"] == pytest.approx(path.metrics.cagr * 100)
         assert written_metrics["max_drawdown"] == pytest.approx(path.metrics.max_drawdown * 100)
         assert written_metrics["max_drawdown"] <= 0
+        assert written_metrics["annualized_volatility"] == pytest.approx(
+            path.metrics.annualized_volatility * 100
+        )
+        assert written_metrics["annualized_volatility"] > 0
+    assert metadata["units"]["annualized_volatility"] == "percent_per_year"
 
 
 def test_metadata_has_every_rebalance_for_both_portfolios(written):
@@ -710,6 +744,17 @@ def test_verification_catches_changed_metrics(written):
     with open(metadata_path, encoding="utf-8") as f:
         metadata = yaml.safe_load(f)
     metadata["metrics"]["max_sharpe"]["cagr"] += 1.0
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        yaml.dump(metadata, f)
+    with pytest.raises(InvariantError, match="metrics"):
+        verify_backtest_files(daily_path, metadata_path)
+
+
+def test_verification_catches_a_changed_volatility(written):
+    _, daily_path, metadata_path = written
+    with open(metadata_path, encoding="utf-8") as f:
+        metadata = yaml.safe_load(f)
+    metadata["metrics"]["equal_weight"]["annualized_volatility"] += 1.0
     with open(metadata_path, "w", encoding="utf-8") as f:
         yaml.dump(metadata, f)
     with pytest.raises(InvariantError, match="metrics"):

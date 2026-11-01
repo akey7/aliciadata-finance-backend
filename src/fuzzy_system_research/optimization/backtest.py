@@ -38,6 +38,10 @@ Conventions:
 - CAGR is compounded, unlike the arithmetic annualization of
   optimization_metadata.yml: (end wealth)^(252 / E) - 1. It extrapolates a
   short window to a full year, so it is noisy.
+- Annualized volatility is realized: the sample standard deviation (ddof = 1)
+  of the E daily returns × √252, the same annualization as
+  optimization_metadata.yml. It is noisy too, and it needs at least two
+  scored days.
 - Execution is idealized: rebalancing happens exactly at the close whose
   price the optimization has just used, with no transaction costs or
   slippage. This is not an execution-realistic trading simulation, and the
@@ -69,6 +73,7 @@ from fuzzy_system_research.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
     PortfolioStats,
+    annualize_risk,
 )
 from fuzzy_system_research.optimization.workflow import (
     EXACT_RELATIVE_TOLERANCE,
@@ -123,11 +128,15 @@ class PerformanceMetrics:
     max_drawdown : float
         Largest peak-to-trough decline of wealth, including the initial
         $1.00 in the running peak. Zero or negative.
+
+    annualized_volatility : float
+        Sample standard deviation of the daily returns (ddof = 1) × √252.
     """
 
     cumulative_return: float
     cagr: float
     max_drawdown: float
+    annualized_volatility: float
 
 
 @dataclass(frozen=True, eq=False)
@@ -275,14 +284,15 @@ def performance_metrics(
     wealth: np.ndarray, periods_per_year: int = TRADING_DAYS_PER_YEAR
 ) -> PerformanceMetrics:
     """
-    Cumulative return, CAGR, and maximum drawdown of a wealth series. The
-    initial value counts toward the running peak, so a loss from the first
-    day is a drawdown. Pure function.
+    Cumulative return, CAGR, maximum drawdown, and annualized volatility of a
+    wealth series. The initial value counts toward the running peak, so a
+    loss from the first day is a drawdown. Pure function.
 
     Parameters
     ----------
     wealth : np.ndarray
-        Wealth, shape (E + 1,), including the initial value.
+        Wealth, shape (E + 1,), including the initial value, with E at least
+        2 so the volatility is defined.
 
     periods_per_year : int, optional
         Trading days per year. Defaults to 252.
@@ -290,15 +300,19 @@ def performance_metrics(
     Returns
     -------
     PerformanceMetrics
-        The three metrics, as fractions.
+        The four metrics, as fractions.
     """
     growth = wealth[-1] / wealth[0]
     years = (len(wealth) - 1) / periods_per_year
     drawdowns = wealth / np.maximum.accumulate(wealth) - 1.0
+    daily_returns = wealth[1:] / wealth[:-1] - 1.0
     return PerformanceMetrics(
         cumulative_return=float(growth - 1.0),
         cagr=float(growth ** (1.0 / years) - 1.0),
         max_drawdown=float(drawdowns.min()),
+        annualized_volatility=float(
+            annualize_risk(daily_returns.std(ddof=1), periods_per_year)
+        ),
     )
 
 
@@ -483,12 +497,18 @@ def run_portfolio_backtest(
     Raises
     ------
     ValueError
-        If rebalance_interval does not divide evaluation_days, a price is
-        missing, or no DTB3 rate precedes a rebalance date.
+        If evaluation_days is below 2, rebalance_interval does not divide
+        evaluation_days, a price is missing, or no DTB3 rate precedes a
+        rebalance date.
 
     InvariantError
         If the result violates check_backtest_invariants().
     """
+    if evaluation_days < 2:
+        raise ValueError(
+            f"The backtest needs at least 2 scored days for its volatility, got "
+            f"{evaluation_days}."
+        )
     if evaluation_days % rebalance_interval != 0:
         raise ValueError(
             f"{evaluation_days} scored days do not fall into whole holding periods "
@@ -641,6 +661,7 @@ def check_backtest_invariants(result: BacktestResult) -> None:
             _same(recomputed.cumulative_return, path.metrics.cumulative_return)
             and _same(recomputed.cagr, path.metrics.cagr)
             and _same(recomputed.max_drawdown, path.metrics.max_drawdown)
+            and _same(recomputed.annualized_volatility, path.metrics.annualized_volatility)
         ):
             _fail(f"{name} metrics differ from those of its wealth.")
 
@@ -763,6 +784,7 @@ def build_backtest_metadata(
             "cumulative_return": path.metrics.cumulative_return * 100,
             "cagr": path.metrics.cagr * 100,
             "max_drawdown": path.metrics.max_drawdown * 100,
+            "annualized_volatility": path.metrics.annualized_volatility * 100,
         }
 
     def portfolio_at(path: PortfolioPath, i: int, stats: PortfolioStats) -> dict:
@@ -829,6 +851,7 @@ def build_backtest_metadata(
             "cumulative_return": "percent",
             "cagr": "percent",
             "max_drawdown": "percent",
+            "annualized_volatility": "percent_per_year",
             "weights": "percent",
             "risk_free_rate": "percent_per_year",
         },
@@ -923,6 +946,7 @@ def verify_backtest_files(daily_path: str, metadata_path: str) -> None:
             _same(recomputed.cumulative_return * 100, written["cumulative_return"])
             and _same(recomputed.cagr * 100, written["cagr"])
             and _same(recomputed.max_drawdown * 100, written["max_drawdown"])
+            and _same(recomputed.annualized_volatility * 100, written["annualized_volatility"])
         ):
             _fail(f"the .yml file's {name} metrics differ from the .csv file's wealth.")
 
