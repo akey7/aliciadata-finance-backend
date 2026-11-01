@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Contract version** | 40 |
+| **Contract version** | 41 |
 | **Last updated** | 2026-11-01 |
 | **Source of truth** | `fuzzy-system-research` (backend). The copy in `fuzzy-system-finance` is a mirror. |
 
@@ -499,7 +499,7 @@ units:
 | `schedule.training_window_returns` | int | Daily simple returns in each training window; the window holds one more close than this. A backend setting. |
 | `schedule.rebalance_interval_sessions` | int | Trading sessions between rebalances, and in each holding period. A backend setting. |
 | `schedule.rebalance_count` | int | Number of rebalances: `trading_days` / `rebalance_interval_sessions`. |
-| `schedule.fallback_count` | int | Rebalances that used the fallback. Normally 0. Show it if it is not. |
+| `schedule.fallback_count` | int | Rebalances that used the fallback. Normally 0. If it is not, that is an assumption worth including in the section's collapsible accordion (see "Notes"). |
 | `constraints.*` | mixed | The same constraints as in `optimization_metadata.yml`, applied to the target weights only. |
 | `annualization.method`, `.periods_per_year` | string, int | How `cagr` is annualized: `compounded`, with `252` trading days per year. |
 | `units.*` | string | Units of each quantity in the two backtest files. |
@@ -525,14 +525,16 @@ units:
 
 ### Notes
 
+**Where this text goes.** The wording in these notes is suggested, and nothing here requires text at a specific place on the page. Put assumptions and limitations in the collapsible accordion that explains the assumptions of the section showing the backtest. For disclaimers, rely on the single "Not investment advice" text at the bottom of the UI, which already covers every file in this contract (see "Where the data lives"), and do not add another.
+
 - **Different annualization from the optimization files.** `cagr` is **compounded** and realized, while `annualized_return` in `optimization_metadata.yml`, `final_optimization`, and `in_sample` is arithmetic and is an in-sample estimate, not a realized return. Do not put them side by side as the same quantity, and label `cagr` "CAGR".
 - **`cagr` extrapolates.** It scales a short window to a full year, so a few good days give a large number. Prefer `cumulative_return` for the headline comparison.
-- **Small sample.** One window of `trading_days` days cannot show that either portfolio is better: the difference is one noisy outcome, and the backtest has only `rebalance_count` independent decisions. Say so in user-facing text.
+- **Small sample.** One window of `trading_days` days cannot show that either portfolio is better: the difference is one noisy outcome, and the backtest has only `rebalance_count` independent decisions.
 - **Fixed universe.** The tickers are the ones in the portfolio today, chosen with hindsight, for both portfolios.
 - **Idealized execution.** Each rebalance happens exactly at the close whose price the optimization just used, with no transaction costs or slippage. The max Sharpe ratio portfolio generally trades more than the baseline, so costs would hurt it more. This is not an execution-realistic trading simulation.
 - **Prices.** The returns come from Massive.com's adjusted closes, and dividends are not assumed to be included (see "Shared conventions"). If they are not, these are price returns, which understate the tickers that pay dividends.
 - **Comparing dates.** Consecutive date folders overlap almost entirely, and the settings can differ between folders. Compare `trading_days` and `schedule` before comparing metrics across dates.
-- **Suggested wording near the backtest** (fill in `{n}` from `evaluation_window.trading_days`, `{r}` from `schedule.rebalance_interval_sessions`, and `{t}` from `schedule.training_window_returns`): "Growth of $1 over the last {n} trading days. Every {r} trading days, the max Sharpe ratio portfolio is re-optimized on the previous {t} daily returns, using only data available at that date, and the baseline is reset to equal weights; between those dates no trades are made and weights drift. Execution is idealized, with no transaction costs. {n} trading days is a short period for a fixed set of tickers chosen with hindsight, so this does not show that either portfolio is better."
+- **Suggested wording for the accordion** (fill in `{n}` from `evaluation_window.trading_days`, `{r}` from `schedule.rebalance_interval_sessions`, and `{t}` from `schedule.training_window_returns`): "Growth of $1 over the last {n} trading days. Every {r} trading days, the max Sharpe ratio portfolio is re-optimized on the previous {t} daily returns, using only data available at that date, and the baseline is reset to equal weights; between those dates no trades are made and weights drift. Execution is idealized, with no transaction costs. {n} trading days is a short period for a fixed set of tickers chosen with hindsight, so this does not show that either portfolio is better."
 
 ---
 
@@ -773,6 +775,7 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 41 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. The backtest text added since v36 no longer asks for text at specific places on the page. Its wording is now suggested: assumptions and limitations go in the collapsible accordion that explains the assumptions of the section showing the backtest, and disclaimers rely on the single "Not investment advice" text at the bottom of the UI, with no additional disclaimer. Frontend: no required change; use the suggested wording in the accordion as you see fit. |
 | 40 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. "Verification status" now records that `final_optimization`, `in_sample`, `max_return_portfolio`, `portfolio_backtest_daily.csv`, and the backtest metrics were checked against the local files of a real run. Still listed as not verified: reading the `.h5` match directly, and the backtest objects in the bucket. Frontend: no change required; replace its copy with this file. |
 | 39 | 2026-11-01 | Bug fix; no change to files, keys, columns, types, or units. `max_return_portfolio` is now the exact closed-form solution instead of a numerical optimization. The numerical optimizer could report success while falling slightly short of the true maximum when tickers had nearly equal mean returns, and the backend's check then failed the run before uploading. In new date folders, `max_return_portfolio` and the top of `efficient_frontier` can differ very slightly from what the optimizer gave, and its weights are exact. A run can no longer fail because the maximum return optimization did not converge, so "Converged optimizations only" now names only the max Sharpe ratio and minimum variance optimizations. Frontend: no change required; replace its copy with this file. |
 | 38 | 2026-11-01 | **Configuration and methodology change, plus additive keys, approved by the human.** No key, column, file, type, or unit is renamed or removed, and the upload order is unchanged. Purpose: the live max Sharpe ratio portfolio now appears in the backtest file and is checked against the optimization files. (1) The live optimization now uses the backtest's training window length, one return more than before, so `date_updated.date_from` moves one session earlier and every value in `optimization_metadata.yml` and `portfolio_optimization_plot_data.h5` shifts slightly. (2) The live risk-free rate now follows the backtest's rule, the last DTB3 rate dated before the date folder's date, so it no longer depends on the day the backend ran; a run made after the as-of date's rate was published uses the rate before it. `risk_free_rate_date` keeps its format. (3) `portfolio_backtest_metadata.yml` gains `final_optimization` (the live optimization's date, window, risk-free rate, return, volatility, Sharpe ratio, and weights) and `rebalances[].<portfolio>.in_sample` (each portfolio's target weights evaluated on that training window). (4) The run fails before uploading if `final_optimization` differs from `optimization_metadata.yml` or the `.h5` file's max Sharpe ratio point. The last rebalance still differs from the live portfolio, because it is one holding period older. Date folders written before v38 keep their values and do not have the new keys, and comparisons with them mix training window lengths by one return. Frontend: no change required; treat the new keys as optional; to show the live portfolio next to the backtest, use `final_optimization`, not `rebalances[-1]`; show `in_sample` values only as estimates. |
