@@ -57,17 +57,17 @@ portfolio_optimization:
   random_seed: ...                # seed for those random portfolios
   near_frontier_tolerance: ...    # pp of return counted as near the frontier (metadata only)
 portfolio_backtest:
-  training_window_returns: ...     # daily returns per optimization
+  training_window_returns: ...     # daily returns per optimization, live and backtest
   rebalance_interval_sessions: ... # trading sessions between rebalances
 ```
 
 - `training_window_length` counts **closing prices**; each window has one fewer daily log return than closes.
 - `evaluation_window_length` is the number of backtest days in `all_forecasts.csv` (plus the live forecast) and in the metrics of `all_forecasts_metadata.yml`.
 - Every key is required, and unknown keys are rejected, so a typo stops the run before any download instead of silently using a default.
-- The run downloads enough history for the ARIMA windows plus scored days, the optimization's 252 sessions, and the backtest's training window plus scored days, whichever is longest, with a small margin.
+- The run downloads enough history for the ARIMA windows plus scored days and for the backtest's training window plus scored days, whichever is longer, with a small margin.
 - Each run records the time series values it used in `all_forecasts_metadata.yml` (`forecast_window.training_window_returns`, `evaluation_window.target_trading_days`), which is where the frontend reads them.
 - The portfolio settings apply to one shared problem definition: the weight cap constrains the max Sharpe ratio and minimum variance portfolios, the efficient frontier, and the random portfolios alike. `efficient_frontier_points` and `simulated_portfolios` set the lengths of those arrays in `portfolio_optimization_plot_data.h5`, which the frontend reads from the file. The same seed and data draw the same random portfolios.
-- The portfolio backtest scores the same `evaluation_window_length` days as the forecasts and uses the same `weight_cap_multiple` as the optimization. `training_window_returns` counts **daily returns**, so each window holds one more close than this. `rebalance_interval_sessions` must divide `evaluation_window_length` exactly, or the run stops before any download. Each run records these values in `portfolio_backtest_metadata.yml`.
+- The portfolio backtest scores the same `evaluation_window_length` days as the forecasts and uses the same `weight_cap_multiple` as the optimization. `training_window_returns` counts **daily returns**, so each window holds one more close than this, and it also sets the live optimization's window, so changing it changes the optimization files too. `rebalance_interval_sessions` must divide `evaluation_window_length` exactly, or the run stops before any download. Each run records these values in `portfolio_backtest_metadata.yml`.
 
 Changing a value changes what is uploaded. After changing a time series setting, run with `--retrain-arima`, because the cached forecasts for a date are otherwise reused; the optimization and the backtest are recomputed on every run. `INTERFACE_CONTRACT.md` does not depend on the values, so changing them needs no contract update as long as their meaning stays the same.
 

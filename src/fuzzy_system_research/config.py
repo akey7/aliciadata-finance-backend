@@ -21,7 +21,7 @@ File layout:
       random_seed: <int>                # seed for the random portfolios
       near_frontier_tolerance: <number> # pp of return counted as "near" the frontier
     portfolio_backtest:
-      training_window_returns: <int>     # daily returns per optimization
+      training_window_returns: <int>     # daily returns per optimization, live too
       rebalance_interval_sessions: <int> # trading sessions between rebalances
 
 The backtest scores the same number of days as the forecasts
@@ -184,8 +184,9 @@ class PortfolioBacktestConfig:
     ----------
     training_window_returns : int
         Daily simple returns in each optimization's training window, ending
-        on the rebalance date. The window holds one more close than this. At
-        least MIN_BACKTEST_TRAINING_RETURNS.
+        on the rebalance date. The live optimization uses the same length,
+        so the two can be compared. The window holds one more close than
+        this. At least MIN_BACKTEST_TRAINING_RETURNS.
 
     rebalance_interval_sessions : int
         Trading sessions between rebalances, and so in each holding period.
@@ -210,13 +211,18 @@ class PortfolioBacktestConfig:
             BACKTEST_SECTION,
         )
 
+    @property
+    def training_window_closes(self) -> int:
+        """Closes in each training window: one more than daily returns."""
+        return self.training_window_returns + 1
+
     def sessions_needed(self, evaluation_days: int) -> int:
         """
         Most recent trading sessions the backtest needs: one training
         window's closes, ending on the first rebalance date, plus one
-        session per scored day: training_window_returns + 1 + evaluation_days.
+        session per scored day: training_window_closes + evaluation_days.
         """
-        return self.training_window_returns + 1 + evaluation_days
+        return self.training_window_closes + evaluation_days
 
 
 @dataclass(frozen=True)

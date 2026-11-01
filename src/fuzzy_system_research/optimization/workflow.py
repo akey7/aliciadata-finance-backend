@@ -17,8 +17,8 @@ for everything:
   Sharpe ratio point.
 - optimization_metadata.yml also records why the random cloud sits where
   it does: each asset's own return and volatility, the constraints, the maximum
-  return portfolio (the top of the frontier, checked against its closed
-  form), and a summary of the random portfolios (RandomPortfolioSummary).
+  return portfolio (the top of the frontier, in closed form), and a summary
+  of the random portfolios (RandomPortfolioSummary).
 
 Conventions:
 - Returns are simple daily returns in percent; the optimizers work in daily
@@ -31,9 +31,9 @@ Conventions:
   keeps the capital allocation line straight.
 - Mean returns and covariance are estimated from about one year of daily
   data, so the results are noisy.
-- The minimum variance, max Sharpe ratio, and maximum return optimizations
-  must converge; otherwise portfolio.OptimizationError stops the run before
-  the optimization files are written and before anything is uploaded. An
+- The minimum variance and max Sharpe ratio optimizations must converge;
+  otherwise portfolio.OptimizationError stops the run before the optimization
+  files are written and before anything is uploaded. An
   efficient-frontier target return that cannot be reached is recorded as NaN
   instead (see docs/INTERFACE_CONTRACT.md).
 - check_optimization_invariants() and verify_optimization_files() raise
@@ -377,8 +377,8 @@ def run_portfolio_optimization(
     Raises
     ------
     portfolio.OptimizationError
-        If the minimum variance, max Sharpe ratio, or maximum return
-        optimization does not converge.
+        If the minimum variance or max Sharpe ratio optimization does not
+        converge.
 
     InvariantError
         If the results violate check_optimization_invariants().
@@ -658,7 +658,7 @@ def build_optimization_metadata(
         Tickers of the portfolio, in the backend's own order.
 
     risk_free_rate_data : dict
-        As returned by portfolio.get_risk_free_rate(): risk_free_rate,
+        As returned by portfolio.risk_free_rate_before(): risk_free_rate,
         daily_risk_free_rate, and risk_free_rate_date.
 
     Returns

@@ -19,6 +19,13 @@ every R sessions:
 - Wealth starts at $1.00 at the close of t-E and compounds the E daily
   portfolio returns, giving E + 1 observations.
 
+The last rebalance is at t-R, so its weights are not the live portfolio's. The
+live optimization at t uses the same training window length and risk-free
+rule, and holds nothing in the backtest. portfolio_backtest_metadata.yml
+records it as final_optimization, copied from the live result rather than
+solved again, and verify_final_optimization() checks that record against
+optimization_metadata.yml and portfolio_optimization_plot_data.h5.
+
 Conventions:
 - The window lengths come from config/modeling_and_optimization.yml.
 - Returns are simple daily returns of adjusted closes. They are fractions in
@@ -41,12 +48,15 @@ Conventions:
   and are always feasible. Each rebalance records its status.
 
 check_backtest_prices() rejects missing data before anything is computed, and
-check_backtest_invariants() and verify_backtest_files() raise InvariantError,
-so a failed check stops the run before anything is uploaded.
+check_backtest_invariants(), verify_backtest_files(), and
+verify_final_optimization() raise InvariantError, so a failed check stops the
+run before anything is uploaded.
 """
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Callable
+import h5py
 import numpy as np
 import pandas as pd
 import yaml
@@ -58,11 +68,13 @@ from fuzzy_system_research.optimization.portfolio import (
 from fuzzy_system_research.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
+    PortfolioStats,
 )
 from fuzzy_system_research.optimization.workflow import (
     EXACT_RELATIVE_TOLERANCE,
     WEIGHT_TOLERANCE,
     InvariantError,
+    OptimizationResult,
 )
 
 # RebalanceRecord.status values.
@@ -179,6 +191,11 @@ class RebalanceRecord:
 
     status : str
         STATUS_OPTIMIZED, STATUS_FALLBACK_PREVIOUS, or STATUS_FALLBACK_EQUAL.
+
+    max_sharpe_stats, equal_weight_stats : PortfolioStats
+        Each portfolio's target weights evaluated on this training window:
+        in-sample estimates (annualized arithmetically, in percent), not
+        realized results.
     """
 
     date: pd.Timestamp
@@ -191,6 +208,8 @@ class RebalanceRecord:
     annual_risk_free_rate: float
     risk_free_rate_date: pd.Timestamp
     status: str
+    max_sharpe_stats: PortfolioStats
+    equal_weight_stats: PortfolioStats
 
 
 @dataclass(frozen=True, eq=False)
@@ -513,6 +532,8 @@ def run_portfolio_backtest(
                 annual_risk_free_rate=rate["risk_free_rate"],
                 risk_free_rate_date=pd.Timestamp(rate["risk_free_rate_date"]),
                 status=status,
+                max_sharpe_stats=problem.portfolio_stats(weights),
+                equal_weight_stats=problem.portfolio_stats(problem.equal_weights()),
             )
         )
 
@@ -667,7 +688,54 @@ def backtest_daily_frame(result: BacktestResult) -> pd.DataFrame:
     )
 
 
-def build_backtest_metadata(result: BacktestResult, tickers: list[str]) -> dict:
+def build_final_optimization(
+    optimization: OptimizationResult,
+    risk_free_rate_data: dict,
+    training_dates: pd.DatetimeIndex,
+) -> dict:
+    """
+    Build the final_optimization section of portfolio_backtest_metadata.yml
+    from the live optimization, without solving anything again, so it holds
+    exactly the values of optimization_metadata.yml. Pure function.
+
+    Parameters
+    ----------
+    optimization : OptimizationResult
+        The live optimization's result.
+
+    risk_free_rate_data : dict
+        The rate it used, as returned by portfolio.risk_free_rate_before().
+
+    training_dates : pd.DatetimeIndex
+        The sessions of the closes it was given.
+
+    Returns
+    -------
+    dict
+        The section, ready for build_backtest_metadata().
+    """
+    return {
+        "date": _date_str(optimization.date_to),
+        "training_window": {
+            "first_close_date": _date_str(training_dates[0]),
+            "first_return_date": _date_str(training_dates[1]),
+            "last_close_date": _date_str(training_dates[-1]),
+            "returns": len(training_dates) - 1,
+        },
+        "risk_free_rate": {
+            "risk_free_rate": risk_free_rate_data["risk_free_rate"],
+            "risk_free_rate_date": risk_free_rate_data["risk_free_rate_date"][:10],
+        },
+        "annualized_return": optimization.max_sharpe_return,
+        "risk": optimization.max_sharpe_risk,
+        "sharpe_ratio": optimization.sharpe_ratio,
+        "weights": optimization.max_sharpe_weights_pct,
+    }
+
+
+def build_backtest_metadata(
+    result: BacktestResult, tickers: list[str], final_optimization: dict
+) -> dict:
     """
     Build the contents of portfolio_backtest_metadata.yml as specified in
     docs/INTERFACE_CONTRACT.md. Metrics and weights are in percent. Pure
@@ -680,6 +748,9 @@ def build_backtest_metadata(result: BacktestResult, tickers: list[str]) -> dict:
 
     tickers : list[str]
         Tickers of the portfolio, in the backend's own order.
+
+    final_optimization : dict
+        As returned by build_final_optimization().
 
     Returns
     -------
@@ -694,12 +765,13 @@ def build_backtest_metadata(result: BacktestResult, tickers: list[str]) -> dict:
             "max_drawdown": path.metrics.max_drawdown * 100,
         }
 
-    def weights_at(path: PortfolioPath, i: int) -> dict:
+    def portfolio_at(path: PortfolioPath, i: int, stats: PortfolioStats) -> dict:
         return {
             "target_weights": _weights_pct(result.tickers, path.target_weights[i]),
             "weights_before_rebalance": _weights_pct(
                 result.tickers, path.weights_before_rebalance[i]
             ),
+            "in_sample": dataclasses.asdict(stats),
         }
 
     rebalances = [
@@ -720,8 +792,8 @@ def build_backtest_metadata(result: BacktestResult, tickers: list[str]) -> dict:
                 "risk_free_rate": record.annual_risk_free_rate,
                 "risk_free_rate_date": _date_str(record.risk_free_rate_date),
             },
-            MAX_SHARPE: weights_at(result.max_sharpe, i),
-            EQUAL_WEIGHT: weights_at(result.equal_weight, i),
+            MAX_SHARPE: portfolio_at(result.max_sharpe, i, record.max_sharpe_stats),
+            EQUAL_WEIGHT: portfolio_at(result.equal_weight, i, record.equal_weight_stats),
         }
         for i, record in enumerate(result.rebalances)
     ]
@@ -766,6 +838,7 @@ def build_backtest_metadata(result: BacktestResult, tickers: list[str]) -> dict:
             EQUAL_WEIGHT: metrics_pct(result.equal_weight),
         },
         "rebalances": rebalances,
+        "final_optimization": final_optimization,
     }
 
 
@@ -852,3 +925,70 @@ def verify_backtest_files(daily_path: str, metadata_path: str) -> None:
             and _same(recomputed.max_drawdown * 100, written["max_drawdown"])
         ):
             _fail(f"the .yml file's {name} metrics differ from the .csv file's wealth.")
+
+
+def verify_final_optimization(
+    backtest_metadata_path: str, optimization_metadata_path: str, plot_data_path: str
+) -> None:
+    """
+    Read back the written files and check that final_optimization in
+    portfolio_backtest_metadata.yml is the live optimization, raising
+    InvariantError (before anything is uploaded) if it is not: it ends on
+    evaluation_window.end_date and date_updated.date_to, starts on
+    date_updated.date_from, has schedule.training_window_returns returns,
+    and its risk-free rate, return, volatility, Sharpe ratio, and weights
+    equal those of optimization_metadata.yml, and its return and volatility
+    equal the max Sharpe ratio point in the .h5 file.
+
+    Parameters
+    ----------
+    backtest_metadata_path : str
+        Local path of portfolio_backtest_metadata.yml.
+
+    optimization_metadata_path : str
+        Local path of optimization_metadata.yml.
+
+    plot_data_path : str
+        Local path of portfolio_optimization_plot_data.h5.
+    """
+    with open(backtest_metadata_path, encoding="utf-8") as f:
+        backtest = yaml.safe_load(f)
+    with open(optimization_metadata_path, encoding="utf-8") as f:
+        optimization = yaml.safe_load(f)
+    with h5py.File(plot_data_path, "r") as hf:
+        h5_risk = float(hf["max_sharpe_ratio/xs"][0])
+        h5_return = float(hf["max_sharpe_ratio/ys"][0])
+
+    final = backtest["final_optimization"]
+    window = final["training_window"]
+    dates = optimization["date_updated"]
+    if not (
+        final["date"]
+        == window["last_close_date"]
+        == dates["date_to"]
+        == backtest["evaluation_window"]["end_date"]
+    ):
+        _fail("final_optimization does not end on the optimization's last date.")
+    if window["first_close_date"] != dates["date_from"]:
+        _fail("final_optimization does not start on the optimization's first date.")
+    if window["returns"] != backtest["schedule"]["training_window_returns"]:
+        _fail("final_optimization has a different training window from the rebalances.")
+
+    rate, live_rate = final["risk_free_rate"], optimization["risk_free_rate"]
+    if not (
+        _same(rate["risk_free_rate"], live_rate["risk_free_rate"])
+        and rate["risk_free_rate_date"] == live_rate["risk_free_rate_date"][:10]
+    ):
+        _fail("final_optimization has a different risk-free rate from the optimization.")
+
+    live = optimization["optimum_portfolio"]
+    if not all(
+        _same(final[key], live[key]) for key in ("annualized_return", "risk", "sharpe_ratio")
+    ):
+        _fail("final_optimization's statistics differ from optimum_portfolio.")
+    if final["weights"].keys() != live["weights"].keys() or not all(
+        _same(weight, live["weights"][ticker]) for ticker, weight in final["weights"].items()
+    ):
+        _fail("final_optimization's weights differ from optimum_portfolio.")
+    if not (_same(final["risk"], h5_risk) and _same(final["annualized_return"], h5_return)):
+        _fail("final_optimization differs from the .h5 max Sharpe ratio point.")

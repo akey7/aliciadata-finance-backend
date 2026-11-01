@@ -1,7 +1,8 @@
 """
 Tests for fuzzy_system_research.optimization.backtest: the rebalance schedule,
 temporal leakage, missing data, weight drift, wealth compounding, drawdown, the
-optimization fallback, the invariants, and the two written files.
+optimization fallback, the invariants, the two written files, and the match
+between final_optimization and the live optimization's files.
 
 In-memory only, on synthetic prices, except the file tests, which write under
 pytest's tmp_path. Nothing here touches the network, input/, or output/.
@@ -9,11 +10,13 @@ pytest's tmp_path. Nothing here touches the network, input/, or output/.
 
 import dataclasses
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
 import yaml
 
+from fuzzy_system_research.config import PortfolioOptimizationConfig
 from fuzzy_system_research.optimization import backtest
 from fuzzy_system_research.optimization.backtest import (
     STATUS_FALLBACK_EQUAL,
@@ -21,19 +24,30 @@ from fuzzy_system_research.optimization.backtest import (
     STATUS_OPTIMIZED,
     backtest_daily_frame,
     build_backtest_metadata,
+    build_final_optimization,
     check_backtest_invariants,
     drift_through_holding,
     performance_metrics,
     run_portfolio_backtest,
     simulate_portfolio,
     verify_backtest_files,
+    verify_final_optimization,
     wealth_index,
     write_backtest_daily,
     write_backtest_metadata,
 )
-from fuzzy_system_research.optimization.portfolio import OptimizationError
+from fuzzy_system_research.optimization.portfolio import (
+    OptimizationError,
+    risk_free_rate_before,
+)
 from fuzzy_system_research.optimization.problem import PortfolioProblem
-from fuzzy_system_research.optimization.workflow import InvariantError
+from fuzzy_system_research.optimization.workflow import (
+    InvariantError,
+    build_optimization_metadata,
+    run_portfolio_optimization,
+    write_optimization_metadata,
+    write_plot_data_h5,
+)
 
 TICKERS = ("AAA", "BBB", "CCC")
 # Small windows keep the real optimizer fast; the first test uses full-size ones.
@@ -515,15 +529,66 @@ def test_invariants_catch_metrics_that_differ_from_the_wealth():
 # The written files
 
 
+PO_CONFIG = PortfolioOptimizationConfig(
+    weight_cap_multiple=CAP_MULTIPLE,
+    efficient_frontier_points=20,
+    simulated_portfolios=200,
+    random_seed=0,
+    near_frontier_tolerance=1.0,
+)
+
+
+def live_optimization(prices: pd.DataFrame, rates: pd.DataFrame):
+    """The live optimization at the last session, and its rate and closes."""
+    training_prices = prices.iloc[-(TRAINING_RETURNS + 1) :]
+    rate = risk_free_rate_before(rates, prices.index[-1])
+    result = run_portfolio_optimization(
+        training_prices, rate["daily_risk_free_rate"], PO_CONFIG
+    )
+    return result, rate, training_prices
+
+
 @pytest.fixture
 def written(tmp_path):
     """A backtest with its two files written; returns result and both paths."""
-    result = run()
+    prices = make_prices()
+    rates = make_rates()
+    result = run(prices, rates)
+    optimization, rate, training_prices = live_optimization(prices, rates)
     daily_path = str(tmp_path / "portfolio_backtest_daily.csv")
     metadata_path = str(tmp_path / "portfolio_backtest_metadata.yml")
     write_backtest_daily(result, daily_path)
-    write_backtest_metadata(build_backtest_metadata(result, list(TICKERS)), metadata_path)
+    write_backtest_metadata(
+        build_backtest_metadata(
+            result,
+            list(TICKERS),
+            build_final_optimization(optimization, rate, training_prices.index),
+        ),
+        metadata_path,
+    )
     return result, daily_path, metadata_path
+
+
+@pytest.fixture
+def live_files(tmp_path, written):
+    """The backtest metadata and the live optimization's two files."""
+    prices = make_prices()
+    optimization, rate, _ = live_optimization(prices, make_rates())
+    optimization_path = str(tmp_path / "optimization_metadata.yml")
+    plot_data_path = str(tmp_path / "portfolio_optimization_plot_data.h5")
+    write_optimization_metadata(
+        build_optimization_metadata(optimization, list(TICKERS), rate), optimization_path
+    )
+    write_plot_data_h5(optimization, plot_data_path)
+    return written[2], optimization_path, plot_data_path
+
+
+def edit_yaml(path: str, change) -> None:
+    with open(path, encoding="utf-8") as f:
+        document = yaml.safe_load(f)
+    change(document)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(document, f)
 
 
 def test_daily_frame_has_percent_returns_and_dollar_wealth():
@@ -613,11 +678,26 @@ def test_metadata_has_every_rebalance_for_both_portfolios(written):
                 assert before is None
             else:
                 assert sum(before.values()) == pytest.approx(100)
+            stats = entry[name]["in_sample"]
+            assert stats["sharpe_ratio"] == pytest.approx(
+                (stats["annualized_return"] - entry["risk_free_rate"]["risk_free_rate"])
+                / stats["risk"]
+            )
+
+
+def test_in_sample_stats_favor_max_sharpe_over_equal_weight():
+    # On each training window, the optimized portfolio is the better one.
+    result = run()
+    for record in result.rebalances:
+        assert record.max_sharpe_stats.sharpe_ratio >= (
+            record.equal_weight_stats.sharpe_ratio - 1e-6
+        )
 
 
 def test_metadata_counts_fallbacks():
     result = run(optimizer=flaky_optimizer({1, 3}))
-    assert build_backtest_metadata(result, list(TICKERS))["schedule"]["fallback_count"] == 2
+    metadata = build_backtest_metadata(result, list(TICKERS), {})
+    assert metadata["schedule"]["fallback_count"] == 2
 
 
 def test_written_files_pass_verification(written):
@@ -651,3 +731,95 @@ def test_verification_catches_wealth_that_does_not_compound(written):
     daily.to_csv(daily_path)
     with pytest.raises(InvariantError, match="compound"):
         verify_backtest_files(daily_path, metadata_path)
+
+
+# final_optimization
+
+
+def test_final_optimization_holds_the_live_values_and_window(written):
+    result, _, metadata_path = written
+    prices = make_prices()
+    optimization, rate, _ = live_optimization(prices, make_rates())
+    with open(metadata_path, encoding="utf-8") as f:
+        final = yaml.safe_load(f)["final_optimization"]
+    assert final["date"] == prices.index[-1].strftime("%Y-%m-%d")
+    assert final["training_window"] == {
+        "first_close_date": prices.index[-(TRAINING_RETURNS + 1)].strftime("%Y-%m-%d"),
+        "first_return_date": prices.index[-TRAINING_RETURNS].strftime("%Y-%m-%d"),
+        "last_close_date": final["date"],
+        "returns": TRAINING_RETURNS,
+    }
+    assert final["annualized_return"] == optimization.max_sharpe_return
+    assert final["risk"] == optimization.max_sharpe_risk
+    assert final["sharpe_ratio"] == optimization.sharpe_ratio
+    assert final["weights"] == optimization.max_sharpe_weights_pct
+    assert final["risk_free_rate"]["risk_free_rate"] == rate["risk_free_rate"]
+    assert final["risk_free_rate"]["risk_free_rate_date"] == rate["risk_free_rate_date"][:10]
+    # It is an extra optimization after the rebalances, not one of them.
+    assert result.rebalances[-1].date == prices.index[-(INTERVAL + 1)]
+    assert final["date"] > result.rebalances[-1].date.strftime("%Y-%m-%d")
+
+
+def test_the_live_optimization_follows_the_rebalance_rule():
+    # Solving the last session the way the backtest solves a rebalance gives
+    # the live portfolio, so final_optimization continues the rebalance series.
+    prices = make_prices()
+    rates = make_rates(N_SESSIONS + INTERVAL)
+    optimization, rate, _ = live_optimization(prices, rates)
+    # One more holding period makes the last session of prices a rebalance.
+    extended = make_prices(N_SESSIONS + INTERVAL)
+    extended.iloc[:N_SESSIONS] = prices.to_numpy()
+    result = run(extended.iloc[INTERVAL:], rates)
+    last = result.rebalances[-1]
+    assert last.date == prices.index[-1]
+    assert last.annual_risk_free_rate == pytest.approx(rate["risk_free_rate"])
+    assert result.max_sharpe.target_weights[-1] == pytest.approx(
+        optimization.max_sharpe_weights, abs=1e-9
+    )
+
+
+def test_matching_files_pass_verification(live_files):
+    verify_final_optimization(*live_files)
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        (lambda d: d["final_optimization"].update(date="2020-01-01"), "last date"),
+        (
+            lambda d: d["final_optimization"]["training_window"].update(
+                first_close_date="2020-01-01"
+            ),
+            "first date",
+        ),
+        (
+            lambda d: d["final_optimization"]["training_window"].update(returns=1),
+            "training window",
+        ),
+        (
+            lambda d: d["final_optimization"]["risk_free_rate"].update(risk_free_rate=9.0),
+            "risk-free",
+        ),
+        (
+            lambda d: d["final_optimization"]["risk_free_rate"].update(
+                risk_free_rate_date="2020-01-01"
+            ),
+            "risk-free",
+        ),
+        (lambda d: d["final_optimization"].update(sharpe_ratio=9.0), "statistics"),
+        (lambda d: d["final_optimization"].update(risk=9.0), "statistics"),
+        (lambda d: d["final_optimization"]["weights"].update(AAA=1.0), "weights"),
+        (lambda d: d["final_optimization"]["weights"].pop("AAA"), "weights"),
+    ],
+)
+def test_verification_catches_a_final_optimization_that_differs(live_files, change, message):
+    edit_yaml(live_files[0], change)
+    with pytest.raises(InvariantError, match=message):
+        verify_final_optimization(*live_files)
+
+
+def test_verification_catches_a_different_h5_point(live_files):
+    with h5py.File(live_files[2], "r+") as hf:
+        hf["max_sharpe_ratio/ys"][0] += 1.0
+    with pytest.raises(InvariantError, match=".h5"):
+        verify_final_optimization(*live_files)

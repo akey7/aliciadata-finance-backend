@@ -1,7 +1,7 @@
 """
 Orchestration tests for fuzzy_system_research.pipeline.run_pipeline.
 
-Downloads, ARIMA training, the risk-free rate lookups, the NYSE sessions, and
+Downloads, ARIMA training, the risk-free rate history, the NYSE sessions, and
 S3 are replaced by in-memory doubles; files are written only under pytest's tmp_path. Nothing
 here touches the network, a bucket, or the real input/ and output/ folders.
 """
@@ -24,7 +24,6 @@ from fuzzy_system_research.config import (
 )
 from fuzzy_system_research.data.prices import pivot_close_wide
 from fuzzy_system_research.pipeline import (
-    OPTIMIZATION_LOOKBACK_SESSIONS,
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
     price_download_sessions,
@@ -36,11 +35,6 @@ from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV
 SPACE = "test-space"
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
-RF_DATA = {
-    "risk_free_rate": 4.05,
-    "daily_risk_free_rate": 4.05 / 252,
-    "risk_free_rate_date": "2026-10-08 00:00:00",
-}
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
 # A representative configuration (252 closes, 20 scored days). The tests do
 # not depend on the values in config/modeling_and_optimization.yml.
@@ -68,9 +62,10 @@ N_SESSIONS = PRICE_DOWNLOAD_SESSIONS
 
 
 def fake_risk_free_history(dm) -> pd.DataFrame:
-    # Covers every session of the synthetic prices, starting before them.
+    # Covers every session of the synthetic prices, starting before them, and
+    # changes daily, so a rate from the wrong date is visible.
     dates = pd.bdate_range("2026-06-01", periods=N_SESSIONS + 60)
-    return pd.DataFrame({"DTB3": np.full(len(dates), 4.05)}, index=dates)
+    return pd.DataFrame({"DTB3": np.linspace(3.0, 5.0, len(dates))}, index=dates)
 
 
 def fake_sessions(last_session: pd.Timestamp, n_sessions: int) -> pd.DatetimeIndex:
@@ -157,7 +152,6 @@ def deps(tmp_path):
         tdm=tdm,
         trainer=trainer,
         uploader=uploader,
-        risk_free_rate_getter=lambda dm: dict(RF_DATA),
         risk_free_history_getter=fake_risk_free_history,
         sessions_getter=fake_sessions,
         dm=object(),
@@ -308,7 +302,7 @@ def test_mismatched_optimization_files_upload_nothing(upload_env, deps, monkeypa
 def test_short_cached_download_is_downloaded_again_once(upload_env, deps):
     _, trainer, uploader, kwargs = deps
     full = make_long_prices(n_sessions=N_SESSIONS)
-    short = make_long_prices(n_sessions=OPTIMIZATION_LOOKBACK_SESSIONS + 1)
+    short = make_long_prices(n_sessions=REQUIRED_SESSIONS - 1)
     tdm = FakeTickerDownloadManager(full, cached_df=short)
     kwargs["tdm"] = tdm
     result = run_pipeline(**kwargs)
@@ -341,17 +335,28 @@ def test_refresh_data_with_short_download_fails_without_retrying(upload_env, dep
     assert uploader.calls == []
 
 
-def test_optimization_uses_exactly_the_last_252_sessions(upload_env, deps):
+def test_optimization_uses_the_backtest_training_window(upload_env, deps):
     _, _, _, kwargs = deps
     result = run_pipeline(**kwargs)
     with open(result.metadata_path) as f:
         metadata = yaml.safe_load(f)
     wide = wide_prices()
-    assert len(wide) > OPTIMIZATION_LOOKBACK_SESSIONS  # More was downloaded.
-    assert metadata["date_updated"]["date_from"] == wide.index[
-        -OPTIMIZATION_LOOKBACK_SESSIONS
-    ].strftime("%Y-%m-%d")
+    assert BT_CONFIG.training_window_closes == 253
+    assert len(wide) > 253  # More was downloaded.
+    assert metadata["date_updated"]["date_from"] == wide.index[-253].strftime("%Y-%m-%d")
     assert metadata["date_updated"]["date_to"] == result.as_of
+
+
+def test_optimization_uses_the_last_rate_dated_before_the_as_of_date(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    with open(result.metadata_path) as f:
+        rate = yaml.safe_load(f)["risk_free_rate"]
+    history = fake_risk_free_history(None)
+    previous_session = wide_prices().index[-2].normalize()
+    assert rate["risk_free_rate_date"] == str(previous_session)
+    assert rate["risk_free_rate"] == pytest.approx(history.loc[previous_session, "DTB3"])
+    assert rate["daily_risk_free_rate"] == pytest.approx(rate["risk_free_rate"] / 252)
 
 
 def test_refresh_data_bypasses_download_cache(upload_env, deps):
@@ -458,7 +463,7 @@ def test_optimization_failure_uploads_nothing_but_keeps_forecast_cache(
     def failing_rf(dm):
         raise RuntimeError("risk-free rate unavailable")
 
-    kwargs["risk_free_rate_getter"] = failing_rf
+    kwargs["risk_free_history_getter"] = failing_rf
     with pytest.raises(RuntimeError, match="risk-free rate"):
         run_pipeline(**kwargs)
     assert uploader.calls == []
@@ -523,14 +528,51 @@ def test_backtest_scores_the_same_days_as_the_forecasts(upload_env, deps):
     assert len(daily) == EVALUATION_DAYS + 1
 
 
-def test_backtest_failure_uploads_nothing(upload_env, deps):
+def test_backtest_failure_uploads_nothing(upload_env, deps, monkeypatch):
     _, _, uploader, kwargs = deps
 
-    def failing_history(dm):
-        raise RuntimeError("risk-free history unavailable")
+    def failing_backtest(*args, **kwargs):
+        raise RuntimeError("backtest failed")
 
-    kwargs["risk_free_history_getter"] = failing_history
-    with pytest.raises(RuntimeError, match="risk-free history"):
+    monkeypatch.setattr(pipeline, "run_portfolio_backtest", failing_backtest)
+    with pytest.raises(RuntimeError, match="backtest failed"):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
+
+
+def test_final_optimization_matches_both_optimization_files(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    final = load_backtest_metadata(result)["final_optimization"]
+    with open(result.metadata_path) as f:
+        metadata = yaml.safe_load(f)
+    live = metadata["optimum_portfolio"]
+    assert final["date"] == result.as_of
+    assert final["annualized_return"] == live["annualized_return"]
+    assert final["risk"] == live["risk"]
+    assert final["sharpe_ratio"] == live["sharpe_ratio"]
+    assert final["weights"] == live["weights"]
+    assert final["training_window"]["first_close_date"] == metadata["date_updated"]["date_from"]
+    assert final["training_window"]["returns"] == BT_CONFIG.training_window_returns
+    assert final["risk_free_rate"]["risk_free_rate"] == (
+        metadata["risk_free_rate"]["risk_free_rate"]
+    )
+    with h5py.File(result.plot_data_path, "r") as hf:
+        assert final["risk"] == pytest.approx(hf["max_sharpe_ratio/xs"][0])
+        assert final["annualized_return"] == pytest.approx(hf["max_sharpe_ratio/ys"][0])
+
+
+def test_final_optimization_mismatch_uploads_nothing(upload_env, deps, monkeypatch):
+    _, _, uploader, kwargs = deps
+
+    def mismatch(backtest_metadata_path, optimization_metadata_path, plot_data_path):
+        assert os.path.isfile(backtest_metadata_path)
+        assert os.path.isfile(optimization_metadata_path)
+        assert os.path.isfile(plot_data_path)
+        raise InvariantError("files disagree")
+
+    monkeypatch.setattr(pipeline, "verify_final_optimization", mismatch)
+    with pytest.raises(InvariantError, match="files disagree"):
         run_pipeline(**kwargs)
     assert uploader.calls == []
 

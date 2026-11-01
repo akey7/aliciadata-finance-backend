@@ -307,6 +307,7 @@ def test_backtest_sessions_needed():
     config = PortfolioBacktestConfig(
         training_window_returns=252, rebalance_interval_sessions=5
     )
+    assert config.training_window_closes == 253
     assert config.sessions_needed(60) == 313  # 253 closes + 60 scored days.
 
 

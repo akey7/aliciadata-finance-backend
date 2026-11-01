@@ -8,12 +8,12 @@ all share one constraint set and one formula for return and volatility. The
 optimizers return weights only; the statistics that are uploaded come from
 PortfolioProblem.portfolio_stats().
 
-All optimizations use SciPy's SLSQP, start from equal weights, and work in
-daily units (percent per day, daily risk-free rate).
+The numerical optimizations use SciPy's SLSQP, start from equal weights, and
+work in daily units (percent per day, daily risk-free rate). The maximum
+return portfolio has an exact solution, so it needs no solver.
 """
 
 import os
-import json
 import datetime
 import numpy as np
 import pandas as pd
@@ -123,6 +123,11 @@ def max_return_weights(problem: PortfolioProblem) -> np.ndarray:
     constraints: the top end of the efficient frontier. With the current
     constraints it fills the highest-return assets up to the cap, in order.
 
+    This is PortfolioProblem.max_return_weights_closed_form(), not a solver
+    result. The problem is linear, so its solution is exact, while SLSQP can
+    stop short of it when assets have nearly equal mean returns: the objective
+    is then too flat for its convergence tolerance.
+
     Parameters
     ----------
     problem : PortfolioProblem
@@ -132,15 +137,8 @@ def max_return_weights(problem: PortfolioProblem) -> np.ndarray:
     -------
     np.ndarray
         Weights as fractions, shape (n,), in the order of problem.tickers.
-
-    Raises
-    ------
-    OptimizationError
-        If the optimizer does not converge.
     """
-    result = _minimize(problem, lambda weights: -problem.daily_mean_return(weights))
-    _require_success(result, "maximum return")
-    return result.x
+    return problem.max_return_weights_closed_form()
 
 
 def efficient_frontier(
@@ -235,7 +233,9 @@ def risk_free_rate_before(tb3m_df, cutoff) -> dict:
     The most recent valid 3-month T-bill rate dated strictly before cutoff,
     in the form of latest_risk_free_rate(). A rate observed on the cutoff
     itself is excluded: FRED publishes DTB3 with a lag, so it may not have
-    been available at that day's close. Pure function.
+    been available at that day's close. Every optimization uses this rule,
+    live and backtest alike, so a result does not depend on the day the
+    backend ran. Pure function.
 
     Parameters
     ----------
@@ -261,8 +261,8 @@ def risk_free_rate_before(tb3m_df, cutoff) -> dict:
 def get_risk_free_rate_history(dm):
     """
     Finds the 3-month U.S. treasury bill rates (FRED DTB3) of the past year,
-    for the portfolio backtest, which uses the rate available at each of its
-    past optimization dates. Caches them in input/Risk Free Rate History
+    from which every optimization takes the rate available at its date (see
+    risk_free_rate_before()). Caches them in input/Risk Free Rate History
     YYYY-MM-DD.csv (today's date) so that repeated calls on the same day do
     not download again. A cached file with no valid rate is ignored and
     replaced. The input/ folder is created when the cache is written, if it
@@ -299,50 +299,3 @@ def get_risk_free_rate_history(dm):
         raise ValueError("No non-missing DTB3 (3-month T-bill) rate in the data.")
     tb3m_df.to_csv(ensure_parent_dir(history_filename))
     return tb3m_df
-
-
-def get_risk_free_rate(dm) -> dict:
-    """
-    Finds the risk-free rates of the 3-month U.S. treasury bill on the most
-    recent day with a published rate (see latest_risk_free_rate()). Caches
-    the result in input/Risk Free Rate YYYY-MM-DD.json (today's date) so that
-    repeated calls on the same day do not download again. A cached file whose
-    daily rate is missing or not finite is ignored and replaced. The input/
-    folder is created when the cache is written, if it does not exist yet.
-
-    Parameters
-    ----------
-    dm : DateManager
-        Supplies today's date for the cache file name.
-
-    Returns
-    -------
-    dict[str, float]
-        Returns the risk free annual rate, the risk free daily rate, and the date
-        of those rates.
-
-    Raises
-    ------
-    ValueError
-        If FRED returns no valid DTB3 rate for the past year.
-    """
-    today_date = dm.get_today_date()
-    risk_free_rate_filename = os.path.join("input", f"Risk Free Rate {today_date}.json")
-    if os.path.exists(risk_free_rate_filename):
-        print("Reading risk-free rate cache...")
-        with open(risk_free_rate_filename, "r", encoding="utf-8") as f:
-            risk_free_rate_data = json.load(f)
-        print(risk_free_rate_data)
-        daily_rate = risk_free_rate_data.get("daily_risk_free_rate")
-        if isinstance(daily_rate, (int, float)) and np.isfinite(daily_rate):
-            return risk_free_rate_data
-        print("Cached risk-free rate is invalid; downloading again...")
-    end_date = datetime.datetime.now()
-    start_date = end_date - relativedelta(years=1)
-    print(start_date, end_date)
-    tb3m_df = web.DataReader("DTB3", "fred", start_date, end_date)
-    risk_free_rate_data = latest_risk_free_rate(tb3m_df)
-    print(risk_free_rate_data)
-    with open(ensure_parent_dir(risk_free_rate_filename), "w", encoding="utf-8") as f:
-        json.dump(risk_free_rate_data, f, indent=4)
-    return risk_free_rate_data

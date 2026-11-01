@@ -34,10 +34,11 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
  forecasting/metrics.py             optimization/workflow.py
    accuracy vs. naive, .yml writer    full optimization run, invariant checks,
                                       .h5 and .yml writers, file cross-check
-                                    optimization/backtest.py  ◄── [FRED: DTB3]
+                                    optimization/backtest.py
                                       walk-forward max Sharpe vs. equal weight,
                                       invariant checks, .csv and .yml writers,
-                                      file cross-check
+                                      cross-checks of its files with the
+                                      optimization's files
         │                                │
         └────────────────┬───────────────┘
                          ▼
@@ -50,9 +51,9 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
 ```
 
 - The two paths run one after the other in a single process. Within the time series path, the ARIMA fits for every ticker and day run at the same time in a pool of worker processes (`--workers`).
-- The ARIMA window, the number of scored days, and the optimization's weight cap, plot array lengths, and random seed come from the configuration file (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings)); the optimization window is set in `pipeline.py`.
+- The ARIMA window, the number of scored days, and the optimization's weight cap, plot array lengths, and random seed come from the configuration file (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings)). The optimization uses the backtest's training window length.
 - The optimization has one definition, `PortfolioProblem` in `optimization/problem.py`. Its constraint set is used by every optimizer and by the random portfolios, and its `portfolio_stats()` computes every return, volatility, and Sharpe ratio that is uploaded, so the plot cannot drift from the optimization. `workflow.py` checks the invariants (see its `check_optimization_invariants()`) before the files are written, then reads both written files back and checks that they agree.
-- The backtest (`optimization/backtest.py`) replays past rebalance dates. It passes each `PortfolioProblem` only the closes up to that date, and uses the same optimizer and constraints as the live run, so it evaluates the method the dashboard shows. Its training window, rebalance interval, and scored days come from the configuration file. It needs complete prices: a missing close or NYSE session stops the run.
+- The backtest (`optimization/backtest.py`) replays past rebalance dates. It passes each `PortfolioProblem` only the closes up to that date, and uses the same optimizer and constraints as the live run, so it evaluates the method the dashboard shows. Its training window, rebalance interval, and scored days come from the configuration file. It needs complete prices: a missing close or NYSE session stops the run. Its metadata also records the live optimization as `final_optimization`, without solving it again, and `verify_final_optimization()` checks that record against both optimization files. The last rebalance is one holding period older than the live portfolio, so it differs from it.
 - Nothing is uploaded unless every step succeeds, including those checks.
 
 ## Files read and written
@@ -63,8 +64,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
  READS
    config/modeling_and_optimization.yml     load_config()
    input/annual/Tickers YYYY-MM-DD.csv      price cache, reused for the run date
-   input/Risk Free Rate YYYY-MM-DD.json     T-bill cache, reused for the run date
-   input/Risk Free Rate History YYYY-MM-DD.csv   T-bill history cache for the backtest
+   input/Risk Free Rate History YYYY-MM-DD.csv   T-bill cache, reused for the run date
         │
         ▼
  WRITES (local)                                                         UPLOAD
@@ -121,9 +121,9 @@ Scripts contain argument handling and orchestration: they decide *what* to run. 
 
 The backend uses the following folders. You don't need to create them: the scripts create each one (and any missing parent folders) the first time they write to it. Their content is not committed to GitHub.
 
-1. `input/`: Holds risk free rate data: the latest rate, and the history the backtest uses, one file of each per run date.
+1. `input/`: Holds the risk free rate history (one file per run date), from which every optimization takes its rate. Older `Risk Free Rate YYYY-MM-DD.json` files are no longer used and can be deleted.
 
-2. `input/annual/`: Holds the cached price downloads (one file per run date), long enough for the optimization, the ARIMA forecasts, and the backtest. The optimization uses the last 252 trading days, ARIMA the last training window plus scored backtest days, and the portfolio backtest its own training window plus the same scored days (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings) for where those lengths are set). A cached file that is too short, for example one written before the ARIMA window grew, is downloaded again automatically.
+2. `input/annual/`: Holds the cached price downloads (one file per run date), long enough for the optimization, the ARIMA forecasts, and the backtest. ARIMA uses the last training window plus scored backtest days, the portfolio backtest its own training window plus the same scored days, and the optimization the last of those training windows (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings) for where those lengths are set). A cached file that is too short, for example one written before the ARIMA window grew, is downloaded again automatically.
 
 3. `output/`: Holds the results of runs, in one folder per data as-of date (the last NYSE trading day in the run's data). Subfolders are created automatically. The layout mirrors the frontend buckets, where each file's key is its path below `output/<kind>/`:
 
@@ -160,9 +160,9 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `data/date_manager.py`                      | Date and business day calculations on the NYSE trading calendar (via `exchange_calendars`).                                                             | No                                   |
 | `data/prices.py`                            | Pivots downloaded prices to a wide table and selects the most recent trading sessions.                                                                 | No                                   |
 | `optimization/problem.py`                   | `PortfolioProblem`, the one definition of the optimization: mean and covariance estimates, risk-free rate, the constraint set (`bounds()`, `constraints()`: long-only, sum to 1, configurable cap), `portfolio_stats()` (every uploaded return, volatility, and Sharpe ratio), a seeded sampler of feasible random portfolios, and the annualization helpers. | No |
-| `optimization/portfolio.py`                 | Max Sharpe ratio, minimum variance, and maximum return optimizations under the shared constraints (raising `OptimizationError` if one does not converge), the efficient frontier (unreachable targets become `NaN`), and retrieval of the latest risk-free rate and its history. | No |
+| `optimization/portfolio.py`                 | Max Sharpe ratio and minimum variance optimizations under the shared constraints (raising `OptimizationError` if one does not converge), the maximum return portfolio (exact, in closed form), the efficient frontier (unreachable targets become `NaN`), and retrieval of the risk-free rate history, with the rate available before a given date. | No |
 | `optimization/workflow.py`                  | One full optimization run from prices to annualized results, all from one `PortfolioProblem`: the capital allocation line, the invariant checks (`InvariantError`), the random-portfolio summary, the `.h5` and `.yml` writers, and a read-back check that the two files agree. The `.yml` holds the weights of both the max Sharpe ratio and the minimum variance portfolios, with a comment marking `optimum_portfolio` as the max Sharpe ratio portfolio. | No |
-| `optimization/backtest.py`                  | Walk-forward backtest of the max Sharpe ratio portfolio against equal weights: the rebalance schedule, drifting holdings, wealth and metrics (cumulative return, CAGR, maximum drawdown), a documented fallback for failed optimizations, the invariant checks (`InvariantError`), the `.csv` and `.yml` writers, and a read-back check that the two files agree. | No |
+| `optimization/backtest.py`                  | Walk-forward backtest of the max Sharpe ratio portfolio against equal weights: the rebalance schedule, drifting holdings, wealth and metrics (cumulative return, CAGR, maximum drawdown), a documented fallback for failed optimizations, the invariant checks (`InvariantError`), the `.csv` and `.yml` writers, and read-back checks that the two files agree and that `final_optimization` matches the optimization's files. | No |
 | `forecasting/arima_models.py`               | Trains ARIMA models on price data.                                                                                                                      | No                                   |
 | `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA training over rolling windows; `load_or_train_forecasts` caches the result.                                      | No                                   |
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |

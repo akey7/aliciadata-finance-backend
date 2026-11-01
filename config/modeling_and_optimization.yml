@@ -48,7 +48,9 @@ portfolio_optimization:
 # these values in portfolio_backtest_metadata.yml.
 portfolio_backtest:
   # Daily simple returns in each optimization's training window, ending on the
-  # rebalance date. The window holds one more close than this. At least 30.
+  # rebalance date. The live optimization uses the same length, so its files
+  # and the backtest's final_optimization agree. The window holds one more
+  # close than this. At least 30.
   training_window_returns: 252
   # Trading sessions between rebalances, which is also the length of each
   # holding period. At least 1, and it must divide
