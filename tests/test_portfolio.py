@@ -4,12 +4,11 @@ under the shared PortfolioProblem constraints (including a binding weight
 cap), convergence checks, the maximum return portfolio, the efficient
 frontier and its unreached targets, and the risk-free rate.
 
-In-memory only. get_risk_free_rate() is tested inside pytest's tmp_path with
-the FRED download replaced by a fake, so the real input/ folder and the
-network are never touched.
+In-memory only. get_risk_free_rate_history() is tested inside pytest's
+tmp_path with the FRED download replaced by a fake, so the real input/ folder
+and the network are never touched.
 """
 
-import json
 import os
 
 import numpy as np
@@ -22,11 +21,12 @@ from fuzzy_system_research.optimization import portfolio
 from fuzzy_system_research.optimization.portfolio import (
     OptimizationError,
     efficient_frontier,
-    get_risk_free_rate,
+    get_risk_free_rate_history,
     latest_risk_free_rate,
     max_return_weights,
     max_sharpe_weights,
     min_variance_weights,
+    risk_free_rate_before,
 )
 from fuzzy_system_research.optimization.problem import PortfolioProblem
 
@@ -83,9 +83,8 @@ def test_optimizers_use_the_problems_bounds_and_constraints(monkeypatch):
     monkeypatch.setattr(portfolio, "minimize", spy)
     min_variance_weights(problem)
     max_sharpe_weights(problem)
-    max_return_weights(problem)
     efficient_frontier(problem, 0.05, 0.1, 3)
-    assert len(seen) == 6
+    assert len(seen) == 5
     for kwargs in seen:
         assert kwargs["method"] == "SLSQP"
         assert kwargs["bounds"] == problem.bounds()
@@ -137,6 +136,29 @@ def test_max_return_portfolio_matches_closed_form(cap_multiple):
     ) == pytest.approx(greedy_max_return(problem), abs=1e-12)
 
 
+def test_max_return_is_exact_with_nearly_equal_mean_returns():
+    # Daily mean returns from a real run on which SLSQP reported success but
+    # fell 0.02 percentage points per year short of the maximum, because the
+    # last 20 % could go to any of three nearly equal assets.
+    mean_returns = np.array(
+        [-0.14575, -0.0143, 0.00833, -0.106422, 0.022851, 0.040905, 0.04089, 0.041596]
+        + [0.151825, 0.19424]
+    )
+    problem = make_problem(mean_returns, np.eye(10))
+    expected = np.zeros(10)
+    expected[[7, 8, 9]] = [0.2, 0.4, 0.4]
+    np.testing.assert_allclose(max_return_weights(problem), expected, atol=1e-15)
+
+
+def test_max_return_needs_no_solver(monkeypatch):
+    def no_solver(*args, **kwargs):
+        raise AssertionError("minimize must not be called")
+
+    monkeypatch.setattr(portfolio, "minimize", no_solver)
+    problem = dominant_asset_problem()
+    assert problem.max_constraint_violation(max_return_weights(problem)) <= 1e-12
+
+
 # Convergence: an unconverged optimization must not return weights
 
 
@@ -158,7 +180,6 @@ def failing_minimize(monkeypatch):
     [
         (min_variance_weights, "minimum variance.*Iteration limit"),
         (max_sharpe_weights, "max Sharpe ratio.*status 9"),
-        (max_return_weights, "maximum return"),
     ],
 )
 def test_optimizers_raise_if_they_do_not_converge(failing_minimize, optimizer, name):
@@ -253,17 +274,39 @@ def test_latest_risk_free_rate_with_no_valid_value_raises():
         latest_risk_free_rate(df)
 
 
+def test_risk_free_rate_before_excludes_the_cutoff_and_later():
+    df = fred_frame(["2026-10-07", "2026-10-08", "2026-10-09"], [4.10, 4.05, 4.00])
+    data = risk_free_rate_before(df, pd.Timestamp("2026-10-08 17:00:00"))
+    assert data["risk_free_rate"] == pytest.approx(4.10)
+    assert data["daily_risk_free_rate"] == pytest.approx(4.10 / 252)
+    assert data["risk_free_rate_date"] == "2026-10-07 00:00:00"
+
+
+def test_risk_free_rate_before_skips_holiday_nan():
+    df = fred_frame(["2026-10-09", "2026-10-12"], [4.07, np.nan])
+    data = risk_free_rate_before(df, pd.Timestamp("2026-10-13"))
+    assert data["risk_free_rate"] == pytest.approx(4.07)
+
+
+def test_risk_free_rate_before_with_nothing_earlier_raises():
+    df = fred_frame(["2026-10-09"], [4.07])
+    with pytest.raises(ValueError):
+        risk_free_rate_before(df, pd.Timestamp("2026-10-09"))
+
+
 class FakeDateManager:
     def get_today_date(self) -> str:
         return "2026-10-14"
 
 
+HISTORY_CACHE = os.path.join("input", "Risk Free Rate History 2026-10-14.csv")
+
+
 @pytest.fixture
 def in_tmp_input(tmp_path, monkeypatch):
-    """Run in tmp_path with an empty input/ folder; return the cache path."""
+    """Run in tmp_path with an empty input/ folder."""
     monkeypatch.chdir(tmp_path)
     os.makedirs("input")
-    return os.path.join("input", "Risk Free Rate 2026-10-14.json")
 
 
 @pytest.fixture
@@ -280,53 +323,44 @@ def fake_fred(monkeypatch):
     return calls
 
 
-def test_get_risk_free_rate_downloads_skips_nan_and_writes_cache(in_tmp_input, fake_fred):
-    data = get_risk_free_rate(FakeDateManager())
+def test_get_risk_free_rate_history_downloads_and_writes_cache(in_tmp_input, fake_fred):
+    data = get_risk_free_rate_history(FakeDateManager())
     assert fake_fred["count"] == 1
-    assert data["risk_free_rate"] == pytest.approx(4.07)
-    with open(in_tmp_input, encoding="utf-8") as f:
-        assert json.load(f) == data
+    assert data["DTB3"].iloc[0] == pytest.approx(4.07)
+    assert os.path.exists(HISTORY_CACHE)
 
 
-def test_get_risk_free_rate_uses_valid_cache_without_download(in_tmp_input, fake_fred):
-    cached = {
-        "risk_free_rate": 4.0,
-        "daily_risk_free_rate": 4.0 / 252,
-        "risk_free_rate_date": "2026-10-09 00:00:00",
-    }
-    with open(in_tmp_input, "w", encoding="utf-8") as f:
-        json.dump(cached, f)
-    assert get_risk_free_rate(FakeDateManager()) == cached
-    assert fake_fred["count"] == 0
-
-
-def test_get_risk_free_rate_replaces_cached_nan(in_tmp_input, fake_fred):
-    # A cache written by the old code on a holiday contains NaN.
-    with open(in_tmp_input, "w", encoding="utf-8") as f:
-        f.write(
-            '{"risk_free_rate": NaN, "daily_risk_free_rate": NaN, '
-            '"risk_free_rate_date": "2026-10-12 00:00:00"}'
-        )
-    data = get_risk_free_rate(FakeDateManager())
+def test_get_risk_free_rate_history_cache_reads_back_without_download(
+    in_tmp_input, fake_fred
+):
+    downloaded = get_risk_free_rate_history(FakeDateManager())
+    cached = get_risk_free_rate_history(FakeDateManager())
     assert fake_fred["count"] == 1
-    assert data["risk_free_rate"] == pytest.approx(4.07)
-    with open(in_tmp_input, encoding="utf-8") as f:
-        assert json.load(f)["risk_free_rate"] == pytest.approx(4.07)
+    assert list(cached.index) == list(downloaded.index)
+    assert isinstance(cached.index, pd.DatetimeIndex)
+    assert cached["DTB3"].iloc[0] == pytest.approx(4.07)
+    assert np.isnan(cached["DTB3"].iloc[1])  # A holiday stays empty.
 
 
-def test_get_risk_free_rate_creates_missing_input_folder(tmp_path, monkeypatch, fake_fred):
-    # A fresh checkout has no input/ folder at all.
+def test_get_risk_free_rate_history_replaces_a_cache_without_rates(in_tmp_input, fake_fred):
+    fred_frame(["2026-10-12"], [np.nan]).to_csv(HISTORY_CACHE)
+    data = get_risk_free_rate_history(FakeDateManager())
+    assert fake_fred["count"] == 1
+    assert data["DTB3"].iloc[0] == pytest.approx(4.07)
+
+
+def test_get_risk_free_rate_history_creates_missing_input_folder(
+    tmp_path, monkeypatch, fake_fred
+):
     monkeypatch.chdir(tmp_path)
-    data = get_risk_free_rate(FakeDateManager())
-    cache_path = os.path.join("input", "Risk Free Rate 2026-10-14.json")
-    with open(cache_path, encoding="utf-8") as f:
-        assert json.load(f) == data
+    get_risk_free_rate_history(FakeDateManager())
+    assert os.path.exists(HISTORY_CACHE)
 
 
-def test_get_risk_free_rate_with_no_valid_rate_raises_and_writes_nothing(
+def test_get_risk_free_rate_history_with_no_valid_rate_raises_and_writes_nothing(
     in_tmp_input, fake_fred
 ):
     fake_fred["df"] = fred_frame(["2026-10-12"], [np.nan])
     with pytest.raises(ValueError):
-        get_risk_free_rate(FakeDateManager())
-    assert not os.path.exists(in_tmp_input)
+        get_risk_free_rate_history(FakeDateManager())
+    assert not os.path.exists(HISTORY_CACHE)

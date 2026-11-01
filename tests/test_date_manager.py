@@ -15,7 +15,11 @@ Reference dates (2026):
 import pandas as pd
 import pytest
 
-from fuzzy_system_research.data.date_manager import DateManager, nyse_holidays
+from fuzzy_system_research.data.date_manager import (
+    DateManager,
+    nyse_holidays,
+    nyse_sessions_ending,
+)
 from fuzzy_system_research.forecasting.arima_models import ArimaModels
 
 
@@ -38,6 +42,21 @@ def test_federal_only_holidays_are_trading_days(open_day):
 
 def test_nyse_holidays_contain_no_weekends():
     assert (nyse_holidays().dayofweek < 5).all()
+
+
+def test_nyse_sessions_ending_skips_closures_and_drops_the_time():
+    sessions = nyse_sessions_ending(pd.Timestamp("2026-04-06 17:00:00"), 3)
+    # Good Friday, 2026-04-03, and the weekend are skipped.
+    assert list(sessions) == [
+        pd.Timestamp("2026-04-01"),
+        pd.Timestamp("2026-04-02"),
+        pd.Timestamp("2026-04-06"),
+    ]
+
+
+def test_nyse_sessions_ending_includes_federal_only_holidays():
+    sessions = nyse_sessions_ending(pd.Timestamp("2026-10-13"), 2)
+    assert list(sessions) == [pd.Timestamp("2026-10-12"), pd.Timestamp("2026-10-13")]
 
 
 def test_past_business_day_includes_columbus_day(dm):

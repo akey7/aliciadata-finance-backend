@@ -344,7 +344,6 @@ class ArimaWalkForward:
                     order_keys[2]: q,
                     f"{ticker}_naive": naive,
                 }
-                print(pred_dict)
                 forecast_rows.append(pred_dict)
             forecast_df = (
                 pd.DataFrame(forecast_rows).set_index("pred_date").sort_index()

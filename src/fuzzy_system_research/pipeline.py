@@ -1,12 +1,13 @@
 """
 One backend run: download (or load cached) prices, ARIMA forecasts (or load
-cached), forecast metrics, portfolio optimization, then upload all four
-frontend files.
+cached), forecast metrics, portfolio optimization, a walk-forward portfolio
+backtest, then upload all six frontend files.
 
-The time series settings (training window, scored days) and the portfolio
-optimization settings (weight cap, frontier points, random portfolios, seed)
-come from the configuration file, passed in as a TimeSeriesConfig and a
-PortfolioOptimizationConfig (see config.py).
+The time series settings (training window, scored days), the portfolio
+optimization settings (weight cap, frontier points, random portfolios, seed),
+and the backtest settings (training window, rebalance interval) come from the
+configuration file, passed in as a TimeSeriesConfig, a
+PortfolioOptimizationConfig, and a PortfolioBacktestConfig (see config.py).
 
 Order of operations:
 1. Price data: one download of price_download_sessions() trading days,
@@ -15,14 +16,22 @@ Order of operations:
 2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
    cached as output/time_series/<as-of date>/all_forecasts.csv. Metrics on
    those forecasts are written next to it as all_forecasts_metadata.yml.
-3. Optimization: on the last OPTIMIZATION_LOOKBACK_SESSIONS sessions, written
-   to output/portfolio_optimization/<as-of date>/. Its invariants are checked
+3. Optimization: on the last PortfolioBacktestConfig.training_window_closes
+   sessions, with the last DTB3 rate dated before the as-of date, written to
+   output/portfolio_optimization/<as-of date>/. Its invariants are checked
    before the files are written, and the written .h5 and .yml files are read
    back and checked against each other before any upload.
-4. Upload, only after every step above succeeded, to the one frontend Space
+4. Backtest: the max Sharpe ratio portfolio against equal weights over the
+   same scored days as the forecasts, on the last
+   PortfolioBacktestConfig.sessions_needed() sessions, which must be complete
+   consecutive NYSE sessions. Written to the same folder as the optimization
+   and checked the same way. Its metadata also records step 3's result as
+   final_optimization, and that record is checked against step 3's two files.
+5. Upload, only after every step above succeeded, to the one frontend Space
    under <folder>/<as-of date>/: all_forecasts.csv, all_forecasts_metadata.yml,
-   portfolio_optimization_plot_data.h5, then optimization_metadata.yml last,
-   so the metadata file marks a complete date (see docs/INTERFACE_CONTRACT.md).
+   portfolio_optimization_plot_data.h5, portfolio_backtest_daily.csv,
+   portfolio_backtest_metadata.yml, then optimization_metadata.yml last, so
+   the metadata file marks a complete date (see docs/INTERFACE_CONTRACT.md).
 
 Network, S3, and model training are passed in as dependencies so the
 orchestration can be tested without them.
@@ -32,8 +41,12 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Protocol
 import pandas as pd
-from fuzzy_system_research.config import PortfolioOptimizationConfig, TimeSeriesConfig
-from fuzzy_system_research.data.date_manager import DateManager
+from fuzzy_system_research.config import (
+    PortfolioBacktestConfig,
+    PortfolioOptimizationConfig,
+    TimeSeriesConfig,
+)
+from fuzzy_system_research.data.date_manager import DateManager, nyse_sessions_ending
 from fuzzy_system_research.data.prices import last_n_sessions, pivot_close_wide
 from fuzzy_system_research.data.ticker_download_manager import TickerDownloadManager
 from fuzzy_system_research.forecasting.ticker_predict import (
@@ -45,7 +58,19 @@ from fuzzy_system_research.forecasting.metrics import (
     build_forecast_metadata,
     write_forecast_metadata,
 )
-from fuzzy_system_research.optimization.portfolio import get_risk_free_rate
+from fuzzy_system_research.optimization.backtest import (
+    build_backtest_metadata,
+    build_final_optimization,
+    run_portfolio_backtest,
+    verify_backtest_files,
+    verify_final_optimization,
+    write_backtest_daily,
+    write_backtest_metadata,
+)
+from fuzzy_system_research.optimization.portfolio import (
+    get_risk_free_rate_history,
+    risk_free_rate_before,
+)
 from fuzzy_system_research.optimization.workflow import (
     build_optimization_metadata,
     run_portfolio_optimization,
@@ -59,6 +84,8 @@ from fuzzy_system_research.storage.layout import (
     OPTIMIZATION_METADATA_FILENAME,
     OPTIMIZATION_PLOT_DATA_FILENAME,
     OUTPUT_ROOT,
+    PORTFOLIO_BACKTEST_DAILY_FILENAME,
+    PORTFOLIO_BACKTEST_METADATA_FILENAME,
     PORTFOLIO_OPTIMIZATION,
     TIME_SERIES,
     as_of_date_str,
@@ -68,29 +95,35 @@ from fuzzy_system_research.storage.layout import (
 )
 from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV, S3Uploader
 
-# Trading sessions of price data the portfolio optimization uses (one year).
-OPTIMIZATION_LOOKBACK_SESSIONS = 252
 # Extra sessions requested from the API beyond required_sessions(), so that an
 # off-by-one in counting sessions, or a session missing from the data, does
 # not leave the run short.
 PRICE_DOWNLOAD_MARGIN_SESSIONS = 5
 
 
-def required_sessions(ts_config: TimeSeriesConfig) -> int:
+def required_sessions(
+    ts_config: TimeSeriesConfig, bt_config: PortfolioBacktestConfig
+) -> int:
     """
-    Trading sessions every run needs: enough for both the optimization and
-    the walk-forward ARIMA (TimeSeriesConfig.arima_window_sessions),
-    whichever is larger. Pure function.
+    Trading sessions every run needs: enough for the walk-forward ARIMA
+    (TimeSeriesConfig.arima_window_sessions) and the backtest
+    (PortfolioBacktestConfig.sessions_needed()), whichever is larger. The
+    optimization's window is the last part of the backtest's. Pure function.
     """
-    return max(OPTIMIZATION_LOOKBACK_SESSIONS, ts_config.arima_window_sessions)
+    return max(
+        ts_config.arima_window_sessions,
+        bt_config.sessions_needed(ts_config.evaluation_window_length),
+    )
 
 
-def price_download_sessions(ts_config: TimeSeriesConfig) -> int:
+def price_download_sessions(
+    ts_config: TimeSeriesConfig, bt_config: PortfolioBacktestConfig
+) -> int:
     """
     Trading sessions requested from the API: required_sessions() plus
     PRICE_DOWNLOAD_MARGIN_SESSIONS. Pure function.
     """
-    return required_sessions(ts_config) + PRICE_DOWNLOAD_MARGIN_SESSIONS
+    return required_sessions(ts_config, bt_config) + PRICE_DOWNLOAD_MARGIN_SESSIONS
 
 
 PRICE_DOWNLOAD_FOLDER = os.path.join("input", "annual")
@@ -125,6 +158,8 @@ class PipelineResult:
     forecasts_metadata_path: str
     plot_data_path: str
     metadata_path: str
+    backtest_daily_path: str
+    backtest_metadata_path: str
     trained_arima: bool
     uploaded: tuple[str, ...]
 
@@ -154,10 +189,16 @@ def run_pipeline(
     *,
     ts_config: TimeSeriesConfig,
     po_config: PortfolioOptimizationConfig,
+    bt_config: PortfolioBacktestConfig,
     tdm: TickerDownloadManager | None = None,
     trainer: ForecastTrainer | None = None,
     uploader: Uploader | None = None,
-    risk_free_rate_getter: Callable[[DateManager], dict] = get_risk_free_rate,
+    risk_free_history_getter: Callable[
+        [DateManager], pd.DataFrame
+    ] = get_risk_free_rate_history,
+    sessions_getter: Callable[
+        [pd.Timestamp, int], pd.DatetimeIndex
+    ] = nyse_sessions_ending,
     dm: DateManager | None = None,
     output_root: str = OUTPUT_ROOT,
 ) -> PipelineResult:
@@ -205,7 +246,13 @@ def run_pipeline(
         weight cap, the number of efficient-frontier points and random
         portfolios, and the random seed. Required, like ts_config.
 
-    tdm, trainer, uploader, risk_free_rate_getter, dm : optional
+    bt_config : PortfolioBacktestConfig
+        Portfolio backtest settings from the configuration file: the
+        training window, which the optimization uses too, and the rebalance
+        interval. Required, like ts_config. The backtest scores ts_config's
+        evaluation days and uses po_config's weight cap.
+
+    tdm, trainer, uploader, risk_free_history_getter, sessions_getter, dm : optional
         Dependencies, defaulting to the real implementations. Tests pass
         doubles here to avoid network, S3, and model training.
 
@@ -222,9 +269,11 @@ def run_pipeline(
         uploader = uploader if uploader is not None else S3Uploader()
 
     # 1. Prices
-    n_required = required_sessions(ts_config)
-    n_download = price_download_sessions(ts_config)
+    n_required = required_sessions(ts_config, bt_config)
+    n_download = price_download_sessions(ts_config, bt_config)
     arima_sessions = ts_config.arima_window_sessions
+    evaluation_days = ts_config.evaluation_window_length
+    backtest_sessions = bt_config.sessions_needed(evaluation_days)
     tdm = tdm if tdm is not None else TickerDownloadManager(PRICE_DOWNLOAD_FOLDER)
     dm = dm if dm is not None else DateManager()
     long_df, start_date, end_date = tdm.get_latest_tickers(
@@ -243,8 +292,8 @@ def run_pipeline(
     if len(wide_df) < n_required:
         raise ValueError(
             f"Downloaded prices cover {len(wide_df)} sessions, fewer than the "
-            f"{n_required} needed for ARIMA ({arima_sessions}) and "
-            f"the optimization ({OPTIMIZATION_LOOKBACK_SESSIONS})."
+            f"{n_required} needed for ARIMA ({arima_sessions}) and the backtest "
+            f"({backtest_sessions})."
         )
     print(f"Loaded data from {start_date} to {end_date}")
     as_of = as_of_date_str(wide_df.index)
@@ -284,7 +333,7 @@ def run_pipeline(
             tdm.tickers,
             window_start,
             window_end,
-            eval_days=ts_config.evaluation_window_length,
+            eval_days=evaluation_days,
             training_window_returns=ts_config.training_window_returns,
         ),
         forecasts_metadata_path,
@@ -292,10 +341,12 @@ def run_pipeline(
     print(f"Saved {forecasts_metadata_path}")
 
     # 3. Portfolio optimization
-    risk_free_rate_data = risk_free_rate_getter(dm)
+    tb3m_df = risk_free_history_getter(dm)
+    risk_free_rate_data = risk_free_rate_before(tb3m_df, wide_df.index[-1])
     print(risk_free_rate_data)
+    optimization_prices = last_n_sessions(wide_df, bt_config.training_window_closes)
     result = run_portfolio_optimization(
-        last_n_sessions(wide_df, OPTIMIZATION_LOOKBACK_SESSIONS),
+        optimization_prices,
         risk_free_rate_data["daily_risk_free_rate"],
         po_config,
     )
@@ -319,7 +370,48 @@ def run_pipeline(
     # The two optimization files must agree before either is uploaded.
     verify_optimization_files(plot_data_path, metadata_path)
 
-    # 4. Uploads, optimization metadata last (it marks the date as complete)
+    # 4. Portfolio backtest
+    backtest_prices = last_n_sessions(wide_df, backtest_sessions)
+    backtest_result = run_portfolio_backtest(
+        backtest_prices,
+        tb3m_df,
+        training_window_returns=bt_config.training_window_returns,
+        evaluation_days=evaluation_days,
+        rebalance_interval=bt_config.rebalance_interval_sessions,
+        weight_cap_multiple=po_config.weight_cap_multiple,
+        expected_sessions=sessions_getter(backtest_prices.index[-1], backtest_sessions),
+    )
+    backtest_daily_path = ensure_parent_dir(
+        local_output_path(
+            PORTFOLIO_OPTIMIZATION, as_of, PORTFOLIO_BACKTEST_DAILY_FILENAME, output_root
+        )
+    )
+    write_backtest_daily(backtest_result, backtest_daily_path)
+    print(f"Saved {backtest_daily_path}")
+    backtest_metadata_path = ensure_parent_dir(
+        local_output_path(
+            PORTFOLIO_OPTIMIZATION,
+            as_of,
+            PORTFOLIO_BACKTEST_METADATA_FILENAME,
+            output_root,
+        )
+    )
+    write_backtest_metadata(
+        build_backtest_metadata(
+            backtest_result,
+            tdm.tickers,
+            build_final_optimization(
+                result, risk_free_rate_data, optimization_prices.index
+            ),
+        ),
+        backtest_metadata_path,
+    )
+    print(f"Saved {backtest_metadata_path}")
+    verify_backtest_files(backtest_daily_path, backtest_metadata_path)
+    # The backtest's final optimization must be the optimization just written.
+    verify_final_optimization(backtest_metadata_path, metadata_path, plot_data_path)
+
+    # 5. Uploads, optimization metadata last (it marks the date as complete)
     uploaded: list[str] = []
     if not upload:
         print("Skipping uploads (--no-upload).")
@@ -332,6 +424,16 @@ def run_pipeline(
                 ALL_FORECASTS_METADATA_FILENAME,
             ),
             (plot_data_path, portfolio_folder, OPTIMIZATION_PLOT_DATA_FILENAME),
+            (
+                backtest_daily_path,
+                portfolio_folder,
+                PORTFOLIO_BACKTEST_DAILY_FILENAME,
+            ),
+            (
+                backtest_metadata_path,
+                portfolio_folder,
+                PORTFOLIO_BACKTEST_METADATA_FILENAME,
+            ),
             (metadata_path, portfolio_folder, OPTIMIZATION_METADATA_FILENAME),
         ):
             key = object_key(folder, as_of, filename)
@@ -344,6 +446,8 @@ def run_pipeline(
         forecasts_metadata_path=forecasts_metadata_path,
         plot_data_path=plot_data_path,
         metadata_path=metadata_path,
+        backtest_daily_path=backtest_daily_path,
+        backtest_metadata_path=backtest_metadata_path,
         trained_arima=trained_arima,
         uploaded=tuple(uploaded),
     )
