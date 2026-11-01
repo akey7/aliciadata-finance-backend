@@ -1,14 +1,15 @@
 """
 Orchestration tests for fuzzy_system_research.pipeline.run_pipeline.
 
-Downloads, ARIMA training, the risk-free rate lookup, and S3 are replaced by
-in-memory doubles; files are written only under pytest's tmp_path. Nothing
+Downloads, ARIMA training, the risk-free rate history, the NYSE sessions, and
+S3 are replaced by in-memory doubles; files are written only under pytest's tmp_path. Nothing
 here touches the network, a bucket, or the real input/ and output/ folders.
 """
 
 import os
 
 import h5py
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -16,10 +17,13 @@ import yaml
 from conftest import SYNTHETIC_TICKERS, make_long_prices
 from fuzzy_system_research import pipeline
 from fuzzy_system_research.optimization.workflow import InvariantError
-from fuzzy_system_research.config import PortfolioOptimizationConfig, TimeSeriesConfig
+from fuzzy_system_research.config import (
+    PortfolioBacktestConfig,
+    PortfolioOptimizationConfig,
+    TimeSeriesConfig,
+)
 from fuzzy_system_research.data.prices import pivot_close_wide
 from fuzzy_system_research.pipeline import (
-    OPTIMIZATION_LOOKBACK_SESSIONS,
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
     price_download_sessions,
@@ -31,11 +35,6 @@ from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV
 SPACE = "test-space"
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
-RF_DATA = {
-    "risk_free_rate": 4.05,
-    "daily_risk_free_rate": 4.05 / 252,
-    "risk_free_rate_date": "2026-10-08 00:00:00",
-}
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
 # A representative configuration (252 closes, 20 scored days). The tests do
 # not depend on the values in config/modeling_and_optimization.yml.
@@ -52,10 +51,26 @@ PO_CONFIG = PortfolioOptimizationConfig(
     random_seed=0,
     near_frontier_tolerance=1.0,
 )
-REQUIRED_SESSIONS = required_sessions(TS_CONFIG)
-PRICE_DOWNLOAD_SESSIONS = price_download_sessions(TS_CONFIG)
+BT_CONFIG = PortfolioBacktestConfig(
+    training_window_returns=252, rebalance_interval_sessions=5
+)
+BACKTEST_SESSIONS = BT_CONFIG.sessions_needed(EVALUATION_DAYS)
+REQUIRED_SESSIONS = required_sessions(TS_CONFIG, BT_CONFIG)
+PRICE_DOWNLOAD_SESSIONS = price_download_sessions(TS_CONFIG, BT_CONFIG)
 # A full download: as many sessions as the pipeline requests.
 N_SESSIONS = PRICE_DOWNLOAD_SESSIONS
+
+
+def fake_risk_free_history(dm) -> pd.DataFrame:
+    # Covers every session of the synthetic prices, starting before them, and
+    # changes daily, so a rate from the wrong date is visible.
+    dates = pd.bdate_range("2026-06-01", periods=N_SESSIONS + 60)
+    return pd.DataFrame({"DTB3": np.linspace(3.0, 5.0, len(dates))}, index=dates)
+
+
+def fake_sessions(last_session: pd.Timestamp, n_sessions: int) -> pd.DatetimeIndex:
+    # The synthetic prices are on weekdays, without NYSE holidays.
+    return pd.bdate_range(end=last_session.normalize(), periods=n_sessions)
 
 
 class FakeTickerDownloadManager:
@@ -137,10 +152,12 @@ def deps(tmp_path):
         tdm=tdm,
         trainer=trainer,
         uploader=uploader,
-        risk_free_rate_getter=lambda dm: dict(RF_DATA),
+        risk_free_history_getter=fake_risk_free_history,
+        sessions_getter=fake_sessions,
         dm=object(),
         output_root=str(tmp_path / "output"),
         po_config=PO_CONFIG,
+        bt_config=BT_CONFIG,
     )
     return tdm, trainer, uploader, kwargs
 
@@ -153,7 +170,7 @@ def expected_as_of() -> str:
     return wide_prices().index[-1].strftime("%Y-%m-%d")
 
 
-def test_full_run_writes_four_files_and_uploads_in_order(upload_env, deps):
+def test_full_run_writes_six_files_and_uploads_in_order(upload_env, deps):
     _, _, uploader, kwargs = deps
     result = run_pipeline(**kwargs)
     as_of = expected_as_of()
@@ -163,6 +180,8 @@ def test_full_run_writes_four_files_and_uploads_in_order(upload_env, deps):
         result.forecasts_metadata_path,
         result.plot_data_path,
         result.metadata_path,
+        result.backtest_daily_path,
+        result.backtest_metadata_path,
     ):
         assert os.path.isfile(path)
         assert f"{os.sep}{as_of}{os.sep}" in path
@@ -170,6 +189,8 @@ def test_full_run_writes_four_files_and_uploads_in_order(upload_env, deps):
         f"{TS_FOLDER}/{as_of}/all_forecasts.csv",
         f"{TS_FOLDER}/{as_of}/all_forecasts_metadata.yml",
         f"{PO_FOLDER}/{as_of}/portfolio_optimization_plot_data.h5",
+        f"{PO_FOLDER}/{as_of}/portfolio_backtest_daily.csv",
+        f"{PO_FOLDER}/{as_of}/portfolio_backtest_metadata.yml",
         f"{PO_FOLDER}/{as_of}/optimization_metadata.yml",
     ]
     assert result.uploaded == tuple(key for _, key in uploader.calls)
@@ -192,6 +213,8 @@ def test_local_layout_mirrors_object_keys(upload_env, deps, tmp_path):
         ("time_series", TS_FOLDER),
         ("portfolio_optimization", PO_FOLDER),
         ("portfolio_optimization", PO_FOLDER),
+        ("portfolio_optimization", PO_FOLDER),
+        ("portfolio_optimization", PO_FOLDER),
     ]
     for (local, key), (kind, folder) in zip(uploader.calls, kinds_and_folders):
         relative = os.path.relpath(local, tmp_path / "output" / kind)
@@ -210,7 +233,8 @@ def test_metadata_date_to_equals_folder_date(upload_env, deps):
 def test_single_download_of_enough_sessions_with_cache(upload_env, deps):
     tdm, _, _, kwargs = deps
     run_pipeline(**kwargs)
-    assert REQUIRED_SESSIONS == ARIMA_WINDOW_SESSIONS == 272
+    assert ARIMA_WINDOW_SESSIONS == 272
+    assert REQUIRED_SESSIONS == BACKTEST_SESSIONS == 273  # One more than ARIMA.
     assert PRICE_DOWNLOAD_SESSIONS > REQUIRED_SESSIONS  # A small margin.
     assert tdm.calls == [{"days_in_past": PRICE_DOWNLOAD_SESSIONS, "use_cache": True}]
 
@@ -224,9 +248,9 @@ def test_settings_flow_from_the_config_into_every_step(upload_env, deps):
     tdm = FakeTickerDownloadManager(make_long_prices(n_sessions=N_SESSIONS))
     kwargs.update(ts_config=ts_config, trainer=trainer, tdm=tdm)
     result = run_pipeline(**kwargs)
-    # The optimization's 252 sessions are now the larger need, plus the margin.
-    assert required_sessions(ts_config) == OPTIMIZATION_LOOKBACK_SESSIONS
-    assert tdm.calls[0]["days_in_past"] == price_download_sessions(ts_config)
+    # The backtest's 263 sessions are now the largest need, plus the margin.
+    assert required_sessions(ts_config, BT_CONFIG) == 263
+    assert tdm.calls[0]["days_in_past"] == price_download_sessions(ts_config, BT_CONFIG)
     (window,) = trainer.calls
     assert len(window) == 110  # 100 closes + 10 scored days.
     meta = load_forecasts_metadata(result)
@@ -241,7 +265,7 @@ def test_settings_flow_from_the_config_into_every_step(upload_env, deps):
     ].strftime("%Y-%m-%d")
 
 
-@pytest.mark.parametrize("config_kwarg", ["ts_config", "po_config"])
+@pytest.mark.parametrize("config_kwarg", ["ts_config", "po_config", "bt_config"])
 def test_configs_are_required(upload_env, deps, config_kwarg):
     _, _, _, kwargs = deps
     del kwargs[config_kwarg]
@@ -278,14 +302,14 @@ def test_mismatched_optimization_files_upload_nothing(upload_env, deps, monkeypa
 def test_short_cached_download_is_downloaded_again_once(upload_env, deps):
     _, trainer, uploader, kwargs = deps
     full = make_long_prices(n_sessions=N_SESSIONS)
-    short = make_long_prices(n_sessions=OPTIMIZATION_LOOKBACK_SESSIONS + 1)
+    short = make_long_prices(n_sessions=REQUIRED_SESSIONS - 1)
     tdm = FakeTickerDownloadManager(full, cached_df=short)
     kwargs["tdm"] = tdm
     result = run_pipeline(**kwargs)
     assert [call["use_cache"] for call in tdm.calls] == [True, False]
     (window,) = trainer.calls
     assert len(window) == ARIMA_WINDOW_SESSIONS
-    assert len(uploader.calls) == 4
+    assert len(uploader.calls) == 6
     assert result.as_of == expected_as_of()
 
 
@@ -311,17 +335,28 @@ def test_refresh_data_with_short_download_fails_without_retrying(upload_env, dep
     assert uploader.calls == []
 
 
-def test_optimization_uses_exactly_the_last_252_sessions(upload_env, deps):
+def test_optimization_uses_the_backtest_training_window(upload_env, deps):
     _, _, _, kwargs = deps
     result = run_pipeline(**kwargs)
     with open(result.metadata_path) as f:
         metadata = yaml.safe_load(f)
     wide = wide_prices()
-    assert len(wide) > OPTIMIZATION_LOOKBACK_SESSIONS  # More was downloaded.
-    assert metadata["date_updated"]["date_from"] == wide.index[
-        -OPTIMIZATION_LOOKBACK_SESSIONS
-    ].strftime("%Y-%m-%d")
+    assert BT_CONFIG.training_window_closes == 253
+    assert len(wide) > 253  # More was downloaded.
+    assert metadata["date_updated"]["date_from"] == wide.index[-253].strftime("%Y-%m-%d")
     assert metadata["date_updated"]["date_to"] == result.as_of
+
+
+def test_optimization_uses_the_last_rate_dated_before_the_as_of_date(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    with open(result.metadata_path) as f:
+        rate = yaml.safe_load(f)["risk_free_rate"]
+    history = fake_risk_free_history(None)
+    previous_session = wide_prices().index[-2].normalize()
+    assert rate["risk_free_rate_date"] == str(previous_session)
+    assert rate["risk_free_rate"] == pytest.approx(history.loc[previous_session, "DTB3"])
+    assert rate["daily_risk_free_rate"] == pytest.approx(rate["risk_free_rate"] / 252)
 
 
 def test_refresh_data_bypasses_download_cache(upload_env, deps):
@@ -349,7 +384,7 @@ def test_cached_forecasts_skip_training(upload_env, deps):
     assert second.trained_arima is False
     with open(second.forecasts_path) as f:
         assert f.read() == cached
-    assert len(uploader.calls) == 8  # The cached file is still uploaded.
+    assert len(uploader.calls) == 12  # The cached file is still uploaded.
 
 
 def test_retrain_arima_ignores_cache(upload_env, deps):
@@ -428,7 +463,7 @@ def test_optimization_failure_uploads_nothing_but_keeps_forecast_cache(
     def failing_rf(dm):
         raise RuntimeError("risk-free rate unavailable")
 
-    kwargs["risk_free_rate_getter"] = failing_rf
+    kwargs["risk_free_history_getter"] = failing_rf
     with pytest.raises(RuntimeError, match="risk-free rate"):
         run_pipeline(**kwargs)
     assert uploader.calls == []
@@ -436,6 +471,142 @@ def test_optimization_failure_uploads_nothing_but_keeps_forecast_cache(
         kwargs["output_root"], "time_series", expected_as_of(), "all_forecasts.csv"
     )
     assert os.path.isfile(forecasts)  # A retry will not retrain ARIMA.
+
+
+# The portfolio backtest
+
+
+def load_backtest_metadata(result) -> dict:
+    with open(result.backtest_metadata_path) as f:
+        return yaml.safe_load(f)
+
+
+def long_prices_without(date: str, ticker: str | None = None) -> pd.DataFrame:
+    """A full download with one session removed, or one ticker's close on it."""
+    long_df = make_long_prices(n_sessions=N_SESSIONS)
+    removed = long_df["datetime"].str.startswith(date)
+    if ticker is not None:
+        removed &= long_df["ticker"] == ticker
+    return long_df[~removed].reset_index(drop=True)
+
+
+def first_backtest_session() -> str:
+    # Older than the ARIMA and optimization windows, so only the backtest
+    # sees a gap on this date.
+    return wide_prices().index[-BACKTEST_SESSIONS].strftime("%Y-%m-%d")
+
+
+def test_backtest_uses_its_windows_and_the_settings_of_the_config(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    meta = load_backtest_metadata(result)
+    wide = wide_prices()
+    assert meta["schedule"]["training_window_returns"] == 252
+    assert meta["schedule"]["rebalance_interval_sessions"] == 5
+    assert meta["schedule"]["rebalance_count"] == EVALUATION_DAYS // 5
+    assert meta["constraints"]["weight_cap_multiple"] == PO_CONFIG.weight_cap_multiple
+    assert meta["evaluation_window"]["trading_days"] == EVALUATION_DAYS
+    assert meta["evaluation_window"]["end_date"] == result.as_of
+    assert meta["evaluation_window"]["initial_wealth_date"] == wide.index[
+        -(EVALUATION_DAYS + 1)
+    ].strftime("%Y-%m-%d")
+    first = meta["rebalances"][0]
+    assert first["training_window"]["first_close_date"] == first_backtest_session()
+    assert first["training_window"]["last_close_date"] == first["date"]
+    assert meta["tickers"] == SYNTHETIC_TICKERS
+
+
+def test_backtest_scores_the_same_days_as_the_forecasts(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    backtest = load_backtest_metadata(result)["evaluation_window"]
+    forecasts = load_forecasts_metadata(result)["evaluation_window"]
+    assert backtest["trading_days"] == forecasts["target_trading_days"]
+    assert backtest["start_date"] == forecasts["start_date"]
+    assert backtest["end_date"] == forecasts["end_date"]
+    daily = pd.read_csv(result.backtest_daily_path, index_col="date")
+    assert len(daily) == EVALUATION_DAYS + 1
+
+
+def test_backtest_failure_uploads_nothing(upload_env, deps, monkeypatch):
+    _, _, uploader, kwargs = deps
+
+    def failing_backtest(*args, **kwargs):
+        raise RuntimeError("backtest failed")
+
+    monkeypatch.setattr(pipeline, "run_portfolio_backtest", failing_backtest)
+    with pytest.raises(RuntimeError, match="backtest failed"):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
+
+
+def test_final_optimization_matches_both_optimization_files(upload_env, deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(**kwargs)
+    final = load_backtest_metadata(result)["final_optimization"]
+    with open(result.metadata_path) as f:
+        metadata = yaml.safe_load(f)
+    live = metadata["optimum_portfolio"]
+    assert final["date"] == result.as_of
+    assert final["annualized_return"] == live["annualized_return"]
+    assert final["risk"] == live["risk"]
+    assert final["sharpe_ratio"] == live["sharpe_ratio"]
+    assert final["weights"] == live["weights"]
+    assert final["training_window"]["first_close_date"] == metadata["date_updated"]["date_from"]
+    assert final["training_window"]["returns"] == BT_CONFIG.training_window_returns
+    assert final["risk_free_rate"]["risk_free_rate"] == (
+        metadata["risk_free_rate"]["risk_free_rate"]
+    )
+    with h5py.File(result.plot_data_path, "r") as hf:
+        assert final["risk"] == pytest.approx(hf["max_sharpe_ratio/xs"][0])
+        assert final["annualized_return"] == pytest.approx(hf["max_sharpe_ratio/ys"][0])
+
+
+def test_final_optimization_mismatch_uploads_nothing(upload_env, deps, monkeypatch):
+    _, _, uploader, kwargs = deps
+
+    def mismatch(backtest_metadata_path, optimization_metadata_path, plot_data_path):
+        assert os.path.isfile(backtest_metadata_path)
+        assert os.path.isfile(optimization_metadata_path)
+        assert os.path.isfile(plot_data_path)
+        raise InvariantError("files disagree")
+
+    monkeypatch.setattr(pipeline, "verify_final_optimization", mismatch)
+    with pytest.raises(InvariantError, match="files disagree"):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
+
+
+def test_mismatched_backtest_files_upload_nothing(upload_env, deps, monkeypatch):
+    _, _, uploader, kwargs = deps
+
+    def mismatch(daily_path, metadata_path):
+        assert os.path.isfile(daily_path) and os.path.isfile(metadata_path)
+        raise InvariantError("files disagree")
+
+    monkeypatch.setattr(pipeline, "verify_backtest_files", mismatch)
+    with pytest.raises(InvariantError, match="files disagree"):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
+
+
+def test_a_missing_close_in_the_backtest_window_uploads_nothing(upload_env, deps):
+    _, _, uploader, kwargs = deps
+    kwargs["tdm"] = FakeTickerDownloadManager(
+        long_prices_without(first_backtest_session(), ticker="QQQ")
+    )
+    with pytest.raises(ValueError, match="QQQ"):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
+
+
+def test_a_missing_session_in_the_backtest_window_uploads_nothing(upload_env, deps):
+    _, _, uploader, kwargs = deps
+    session = first_backtest_session()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_prices_without(session))
+    with pytest.raises(ValueError, match=session):
+        run_pipeline(**kwargs)
+    assert uploader.calls == []
 
 
 # all_forecasts_metadata.yml

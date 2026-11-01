@@ -296,8 +296,8 @@ class PortfolioProblem:
         This is exact for this constraint set (long-only, fully invested,
         the same cap for every asset): moving weight from a filled asset to
         a later one can only lower the return. Ties in mean return make the
-        weights non-unique but not the return. Used to check the optimizer's
-        maximum return portfolio, which sets the top of the efficient
+        weights non-unique but not the return. This is the maximum return
+        portfolio that is uploaded, and it sets the top of the efficient
         frontier.
 
         Returns

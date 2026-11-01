@@ -41,3 +41,18 @@ portfolio_optimization:
   # same volatility. Only affects the random_portfolios summary in
   # optimization_metadata.yml. A number greater than 0.
   near_frontier_tolerance: 1.0
+# Walk-forward backtest of the max Sharpe ratio portfolio against equal weights.
+# It scores the last time_series_models.evaluation_window_length trading days,
+# like the forecasts, and uses portfolio_optimization.weight_cap_multiple, like
+# the live optimization. It is recomputed on every run, and each run records
+# these values in portfolio_backtest_metadata.yml.
+portfolio_backtest:
+  # Daily simple returns in each optimization's training window, ending on the
+  # rebalance date. The live optimization uses the same length, so its files
+  # and the backtest's final_optimization agree. The window holds one more
+  # close than this. At least 30.
+  training_window_returns: 252
+  # Trading sessions between rebalances, which is also the length of each
+  # holding period. At least 1, and it must divide
+  # time_series_models.evaluation_window_length exactly.
+  rebalance_interval_sessions: 5

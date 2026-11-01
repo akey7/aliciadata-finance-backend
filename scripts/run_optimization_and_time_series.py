@@ -1,8 +1,8 @@
 """
 Run the whole backend in one command: download prices (or use today's
 cached download), fit walk-forward ARIMA forecasts (or reuse the cached
-forecasts for the data's as-of date), optimize the portfolio, and upload all
-results for the frontend.
+forecasts for the data's as-of date), optimize the portfolio, backtest it
+against equal weights, and upload all results for the frontend.
 
 Run from the repository root:
 
@@ -35,8 +35,9 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         description=(
-            "Download prices, fit ARIMA forecasts, optimize the portfolio, and "
-            "upload the results under a YYYY-MM-DD/ prefix (the data as-of date)."
+            "Download prices, fit ARIMA forecasts, optimize and backtest the "
+            "portfolio, and upload the results under a YYYY-MM-DD/ prefix (the "
+            "data as-of date)."
         )
     )
     parser.add_argument(
@@ -86,6 +87,7 @@ def main() -> None:
     config = load_config(args.config)
     print(f"Using settings from {args.config}: {config.time_series_models}")
     print(f"Using settings from {args.config}: {config.portfolio_optimization}")
+    print(f"Using settings from {args.config}: {config.portfolio_backtest}")
     load_dotenv()
     result = run_pipeline(
         upload=not args.no_upload,
@@ -94,6 +96,7 @@ def main() -> None:
         arima_workers=args.workers,
         ts_config=config.time_series_models,
         po_config=config.portfolio_optimization,
+        bt_config=config.portfolio_backtest,
     )
     print(f"Done: {result.as_of} (ARIMA {'trained' if result.trained_arima else 'cached'})")
     for key in result.uploaded:

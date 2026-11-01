@@ -488,7 +488,6 @@ def test_comment_does_not_change_the_parsed_metadata(result):
     [
         ("min_variance_weights", "minimum variance"),
         ("max_sharpe_weights", "max Sharpe ratio"),
-        ("max_return_weights", "maximum return"),
     ],
 )
 def test_unconverged_optimization_stops_the_run(wide, monkeypatch, optimizer, name):
@@ -514,7 +513,7 @@ def test_annualized_frontier_targets_use_the_shared_helper(result, wide):
 def test_max_return_portfolio_is_the_closed_form_maximum(case):
     _, problem, res = case
     closed_form = problem.portfolio_stats(problem.max_return_weights_closed_form())
-    assert res.max_return_return == pytest.approx(closed_form.annualized_return, abs=1e-3)
+    assert res.max_return_return == closed_form.annualized_return
     assert res.frontier_returns[-1] == pytest.approx(res.max_return_return, rel=1e-12)
     assert problem.max_constraint_violation(res.max_return_weights) <= 1e-5
 

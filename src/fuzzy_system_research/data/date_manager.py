@@ -31,6 +31,32 @@ def nyse_holidays() -> pd.DatetimeIndex:
     return weekdays.difference(cal.sessions)
 
 
+def nyse_sessions_ending(
+    last_session: pd.Timestamp, n_sessions: int
+) -> pd.DatetimeIndex:
+    """
+    The n_sessions consecutive NYSE trading sessions ending on last_session.
+
+    Parameters
+    ----------
+    last_session : pd.Timestamp
+        The last session. Any time of day is dropped.
+
+    n_sessions : int
+        Number of sessions, at least 1.
+
+    Returns
+    -------
+    pd.DatetimeIndex
+        Midnight-normalized dates, in ascending order.
+    """
+    return pd.date_range(
+        end=pd.Timestamp(last_session).normalize(),
+        periods=n_sessions,
+        freq=CustomBusinessDay(holidays=nyse_holidays()),
+    )
+
+
 class DateManager:
     """
     Class to manage ranges of business days according to the New York

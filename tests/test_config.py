@@ -1,7 +1,7 @@
 """
 Tests for fuzzy_system_research.config: strict parsing and validation of the
-time series and portfolio optimization settings, loading from a YAML file,
-and the repository's own
+time series, portfolio optimization, and portfolio backtest settings, loading
+from a YAML file, and the repository's own
 config/modeling_and_optimization.yml.
 
 Files are written only under pytest's tmp_path. The repository's config file
@@ -15,9 +15,11 @@ import pytest
 
 from fuzzy_system_research.config import (
     DEFAULT_CONFIG_PATH,
+    MIN_BACKTEST_TRAINING_RETURNS,
     MIN_TRAINING_WINDOW_LENGTH,
     ConfigError,
     ModelingConfig,
+    PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
     load_config,
@@ -41,13 +43,17 @@ PORTFOLIO_YAML = (
     "  simulated_portfolios: 10000\n"
     "  random_seed: 7\n"
     "  near_frontier_tolerance: 1.0\n"
+    "portfolio_backtest:\n"
+    "  training_window_returns: 252\n"
+    "  rebalance_interval_sessions: 5\n"
 )
+BACKTEST = {"training_window_returns": 252, "rebalance_interval_sessions": 5}
 
 
-def raw(training=252, evaluation=20, portfolio=None, **extra) -> dict:
+def raw(training=252, evaluation=20, portfolio=None, backtest=None, **extra) -> dict:
     """
     A parsed YAML document; extra keys go under time_series_models, and
-    portfolio (a dict) replaces or adds portfolio_optimization keys.
+    portfolio and backtest (dicts) replace or add keys in their sections.
     """
     return {
         "time_series_models": {
@@ -56,6 +62,7 @@ def raw(training=252, evaluation=20, portfolio=None, **extra) -> dict:
             **extra,
         },
         "portfolio_optimization": {**PORTFOLIO, **(portfolio or {})},
+        "portfolio_backtest": {**BACKTEST, **(backtest or {})},
     }
 
 
@@ -74,6 +81,9 @@ def test_parse_config_reads_every_value():
             simulated_portfolios=10_000,
             random_seed=7,
             near_frontier_tolerance=1.0,
+        ),
+        portfolio_backtest=PortfolioBacktestConfig(
+            training_window_returns=252, rebalance_interval_sessions=5
         ),
     )
 
@@ -244,6 +254,63 @@ def test_near_frontier_tolerance_must_be_a_number(value):
         parse_config(raw(portfolio={"near_frontier_tolerance": value}))
 
 
+# portfolio_backtest
+
+
+def test_missing_backtest_section_is_rejected():
+    document = raw()
+    del document["portfolio_backtest"]
+    with pytest.raises(ConfigError, match="missing required key.*portfolio_backtest"):
+        parse_config(document)
+
+
+@pytest.mark.parametrize("key", sorted(BACKTEST))
+def test_missing_backtest_key_is_rejected(key):
+    document = raw()
+    del document["portfolio_backtest"][key]
+    with pytest.raises(ConfigError, match=f"missing required key.*{key}"):
+        parse_config(document)
+
+
+def test_unknown_backtest_key_is_rejected():
+    with pytest.raises(ConfigError, match="unknown key.*rebalance_days"):
+        parse_config(raw(backtest={"rebalance_days": 5}))
+
+
+@pytest.mark.parametrize("key", sorted(BACKTEST))
+@pytest.mark.parametrize("value", [5.0, "5", True, None])
+def test_backtest_values_must_be_integers(key, value):
+    with pytest.raises(ConfigError, match=f"portfolio_backtest.{key} must be an integer"):
+        parse_config(raw(backtest={key: value}))
+
+
+def test_backtest_training_window_has_a_minimum():
+    parse_config(raw(backtest={"training_window_returns": MIN_BACKTEST_TRAINING_RETURNS}))
+    with pytest.raises(ConfigError, match="at least"):
+        parse_config(
+            raw(backtest={"training_window_returns": MIN_BACKTEST_TRAINING_RETURNS - 1})
+        )
+
+
+def test_rebalance_interval_must_be_positive():
+    with pytest.raises(ConfigError, match="at least 1"):
+        parse_config(raw(backtest={"rebalance_interval_sessions": 0}))
+
+
+def test_rebalance_interval_must_divide_the_scored_days():
+    parse_config(raw(evaluation=60, backtest={"rebalance_interval_sessions": 20}))
+    with pytest.raises(ConfigError, match="multiple of.*rebalance_interval_sessions"):
+        parse_config(raw(evaluation=60, backtest={"rebalance_interval_sessions": 7}))
+
+
+def test_backtest_sessions_needed():
+    config = PortfolioBacktestConfig(
+        training_window_returns=252, rebalance_interval_sessions=5
+    )
+    assert config.training_window_closes == 253
+    assert config.sessions_needed(60) == 313  # 253 closes + 60 scored days.
+
+
 # load_config
 
 
@@ -260,6 +327,7 @@ def test_load_config_reads_a_yaml_file(tmp_path):
         training_window_length=100, evaluation_window_length=10
     )
     assert config.portfolio_optimization == PortfolioOptimizationConfig(**PORTFOLIO)
+    assert config.portfolio_backtest == PortfolioBacktestConfig(**BACKTEST)
 
 
 def test_load_config_missing_file_names_the_path(tmp_path):
@@ -301,3 +369,4 @@ def test_repository_config_file_is_valid():
     config = load_config(str(REPO_ROOT / DEFAULT_CONFIG_PATH))
     assert isinstance(config.time_series_models, TimeSeriesConfig)
     assert isinstance(config.portfolio_optimization, PortfolioOptimizationConfig)
+    assert isinstance(config.portfolio_backtest, PortfolioBacktestConfig)

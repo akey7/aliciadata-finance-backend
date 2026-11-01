@@ -16,6 +16,8 @@ from fuzzy_system_research.storage.layout import (
     OPTIMIZATION_METADATA_FILENAME,
     OPTIMIZATION_PLOT_DATA_FILENAME,
     OUTPUT_ROOT,
+    PORTFOLIO_BACKTEST_DAILY_FILENAME,
+    PORTFOLIO_BACKTEST_METADATA_FILENAME,
     PORTFOLIO_OPTIMIZATION,
     TIME_SERIES,
     as_of_date_str,
@@ -34,6 +36,8 @@ def test_contract_file_names():
     assert OPTIMIZATION_PLOT_DATA_FILENAME == "portfolio_optimization_plot_data.h5"
     assert ALL_FORECASTS_FILENAME == "all_forecasts.csv"
     assert ALL_FORECASTS_METADATA_FILENAME == "all_forecasts_metadata.yml"
+    assert PORTFOLIO_BACKTEST_DAILY_FILENAME == "portfolio_backtest_daily.csv"
+    assert PORTFOLIO_BACKTEST_METADATA_FILENAME == "portfolio_backtest_metadata.yml"
 
 
 # as_of_date_str
