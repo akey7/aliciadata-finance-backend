@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Contract version** | 41 |
+| **Contract version** | 42 |
 | **Last updated** | 2026-11-01 |
 | **Source of truth** | `fuzzy-system-research` (backend). The copy in `fuzzy-system-finance` is a mirror. |
 
@@ -431,10 +431,12 @@ final_optimization:
     NVDA: 3.5e-15
 metrics:
   equal_weight:
+    annualized_volatility: 11.5
     cagr: 9.1
     cumulative_return: 2.2
     max_drawdown: -4.8
   max_sharpe:
+    annualized_volatility: 12.7
     cagr: 14.6
     cumulative_return: 3.3
     max_drawdown: -6.1
@@ -479,6 +481,7 @@ tickers:
 - XBI
 - QQQ
 units:
+  annualized_volatility: percent_per_year
   cagr: percent
   cumulative_return: percent
   daily_return: percent
@@ -501,12 +504,13 @@ units:
 | `schedule.rebalance_count` | int | Number of rebalances: `trading_days` / `rebalance_interval_sessions`. |
 | `schedule.fallback_count` | int | Rebalances that used the fallback. Normally 0. If it is not, that is an assumption worth including in the section's collapsible accordion (see "Notes"). |
 | `constraints.*` | mixed | The same constraints as in `optimization_metadata.yml`, applied to the target weights only. |
-| `annualization.method`, `.periods_per_year` | string, int | How `cagr` is annualized: `compounded`, with `252` trading days per year. |
+| `annualization.method`, `.periods_per_year` | string, int | How `cagr` is annualized: `compounded`, with `252` trading days per year. `metrics.<portfolio>.annualized_volatility` uses the same 252 days but is scaled by √252, as in the optimization files. |
 | `units.*` | string | Units of each quantity in the two backtest files. |
 | `assumptions.*` | string | The limits of the comparison, in words. |
 | `metrics.<portfolio>.cumulative_return` | float | Compounded total return over the scored days, **in percent**: (last wealth − 1) × 100. `<portfolio>` is `max_sharpe` or `equal_weight`. |
 | `metrics.<portfolio>.cagr` | float | Compound annual growth rate, **in percent**: (last wealth ^ (252 / `trading_days`) − 1) × 100. |
 | `metrics.<portfolio>.max_drawdown` | float | Largest peak-to-trough decline of wealth, **in percent**, zero or negative (−6.1 means a 6.1 % decline). The initial $1.00 counts toward the running peak. |
+| `metrics.<portfolio>.annualized_volatility` | float | Realized volatility over the scored days, **annualized, in percent**: the sample standard deviation (n − 1 in the denominator) of the portfolio's daily simple returns in `portfolio_backtest_daily.csv` × √252. The returns' own mean is removed, not the risk-free rate. *Added in v42; absent in older files, so treat it as optional.* |
 | `rebalances[].date` | string `YYYY-MM-DD` | The rebalance date, which is the optimization's cutoff. In date order. |
 | `rebalances[].status` | string | `optimized`, `fallback_previous_weights`, or `fallback_equal_weights`. Applies to `max_sharpe` only: the baseline needs no optimization. |
 | `rebalances[].training_window.first_close_date`, `.first_return_date`, `.last_close_date` | string `YYYY-MM-DD` | The first close, the first daily return (one session later), and the last close of the training window. `last_close_date` equals `date`. |
@@ -529,6 +533,7 @@ units:
 
 - **Different annualization from the optimization files.** `cagr` is **compounded** and realized, while `annualized_return` in `optimization_metadata.yml`, `final_optimization`, and `in_sample` is arithmetic and is an in-sample estimate, not a realized return. Do not put them side by side as the same quantity, and label `cagr` "CAGR".
 - **`cagr` extrapolates.** It scales a short window to a full year, so a few good days give a large number. Prefer `cumulative_return` for the headline comparison.
+- **Realized versus estimated volatility** (since v42). `metrics.<portfolio>.annualized_volatility` is realized over the scored days, out of sample. `risk` in `optimization_metadata.yml`, `final_optimization`, and `in_sample` is an in-sample estimate from the training window. Do not present them as the same quantity. Scaling by √252 assumes daily returns are serially uncorrelated, and with only `trading_days` returns the value is itself noisy. Label it "Annualized volatility (realized)" or similar.
 - **Small sample.** One window of `trading_days` days cannot show that either portfolio is better: the difference is one noisy outcome, and the backtest has only `rebalance_count` independent decisions.
 - **Fixed universe.** The tickers are the ones in the portfolio today, chosen with hindsight, for both portfolios.
 - **Idealized execution.** Each rebalance happens exactly at the close whose price the optimization just used, with no transaction costs or slippage. The max Sharpe ratio portfolio generally trades more than the baseline, so costs would hurt it more. This is not an execution-realistic trading simulation.
@@ -769,12 +774,14 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 - `NaN` entries in `efficient_frontier/xs` (inferred from the code for infeasible target returns). Readers must handle `NaN` regardless.
 - The match between `final_optimization` and the `.h5` file on real output, by reading the file directly. It is covered by unit tests and checked on every run before upload, and a real run passed that check.
 - The objects in the bucket for the backtest files. Only the local files were read.
+- `metrics.<portfolio>.annualized_volatility` (v42) on real output. It is covered by unit tests (`tests/test_backtest.py`) and recomputed from the wealth on every run before upload.
 - The temporal-leakage, missing-data, weight-drift, and fallback behavior of the backtest, which are covered by unit tests on synthetic prices (`tests/test_backtest.py`, `tests/test_pipeline.py`). Each run also checks the structure of the backtest and that its two files agree before uploading.
 
 ## Changelog
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 42 | 2026-11-01 | **Additive.** `portfolio_backtest_metadata.yml` gains `metrics.<portfolio>.annualized_volatility` for `max_sharpe` and `equal_weight`: the realized volatility of the portfolio's daily simple returns over the scored days, annualized (sample standard deviation × √252), in percent, and `units.annualized_volatility` (`percent_per_year`). No existing key, column, file, value, unit, or upload order changes. The backend recomputes the value from the wealth series before uploading. A backtest now needs at least 2 scored days, because a standard deviation is undefined for one return; the current setting is well above that. Date folders written before v42 do not have the key unless re-run. Frontend: no change required; optionally show the value; treat it as optional for older dates; do not present it as the same quantity as the in-sample `risk` fields. |
 | 41 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. The backtest text added since v36 no longer asks for text at specific places on the page. Its wording is now suggested: assumptions and limitations go in the collapsible accordion that explains the assumptions of the section showing the backtest, and disclaimers rely on the single "Not investment advice" text at the bottom of the UI, with no additional disclaimer. Frontend: no required change; use the suggested wording in the accordion as you see fit. |
 | 40 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. "Verification status" now records that `final_optimization`, `in_sample`, `max_return_portfolio`, `portfolio_backtest_daily.csv`, and the backtest metrics were checked against the local files of a real run. Still listed as not verified: reading the `.h5` match directly, and the backtest objects in the bucket. Frontend: no change required; replace its copy with this file. |
 | 39 | 2026-11-01 | Bug fix; no change to files, keys, columns, types, or units. `max_return_portfolio` is now the exact closed-form solution instead of a numerical optimization. The numerical optimizer could report success while falling slightly short of the true maximum when tickers had nearly equal mean returns, and the backend's check then failed the run before uploading. In new date folders, `max_return_portfolio` and the top of `efficient_frontier` can differ very slightly from what the optimizer gave, and its weights are exact. A run can no longer fail because the maximum return optimization did not converge, so "Converged optimizations only" now names only the max Sharpe ratio and minimum variance optimizations. Frontend: no change required; replace its copy with this file. |
