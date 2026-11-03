@@ -27,11 +27,13 @@ $$ \sigma_p^2 = \mathbf{w}^{T}\Sigma\mathbf{w} $$
 - annualization;
 - solver/numerical method;
 - Monte Carlo simulation.
+
+### 2.3 Results
+
 - What does the efficient frontier look like for the current asset universe?
 - How different are the max-Sharpe and minimum-variance allocations?
 - Where do Monte Carlo portfolios fall relative to the numerical frontier?
 
-### 2.3 Results
 ### 2.4 Discussion
 
 ## 3. Time-Series Forecasting
@@ -41,3 +43,6 @@ $$ \sigma_p^2 = \mathbf{w}^{T}\Sigma\mathbf{w} $$
 ### 3.4 Discussion
 
 ## 4. Integration and Future Work
+
+The optimization and forecasting components are currently evaluated independently. Forecast estimates are not used as expected-return inputs to portfolio optimization because the forecasting analysis does not demonstrate sufficient out-of-sample improvement over a naive persistence benchmark. Integration therefore remains a potential extension rather than an assumption of the current system.
+
