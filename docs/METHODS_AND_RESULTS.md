@@ -34,14 +34,16 @@ Stock market data is downloaded from the [Massive.com](https://massive.com/) API
 ### 2.2 Methods
 
 **Equation 1.** Expected portfolio return
-$$
+
+```math
 E[R_p] = \mathbf{w}^{T}\boldsymbol{\mu}
-$$
+```
 
 **Equation 2.** Portfolio variance
-$$
+
+```math
 \sigma_p^2 = \mathbf{w}^{T}\Sigma\mathbf{w}
-$$
+```
 
 - constraints on **w**;
 - minimum-variance portfolio;
