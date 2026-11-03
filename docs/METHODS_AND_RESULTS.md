@@ -8,8 +8,8 @@ In contrast to my other projects focusing on life sciences data and renewable en
 
 If you want to jump straight to portfolio optimization or ARIMA time series modeling, you can select one of the following links:
 
-- [2. Portfolio Optimization](#2.-portfolio-optimization)
-- [3. Time-Series Forecasting](#3.-time-series-forecasting)
+- [2. Portfolio Optimization](#2-portfolio-optimization)
+- [3. Time-Series Forecasting](#3-time-series-forecasting)
 
 ### 1.1 Objectives
 
