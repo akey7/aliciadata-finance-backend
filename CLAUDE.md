@@ -84,14 +84,14 @@ Human-facing documentation lives in `README.md` and `docs/`. The priority audien
 | File | Purpose | Audience |
 | --- | --- | --- |
 | `README.md` | Abstract of the project, and a "Documentation" section pointing to the other documents | Data science / quant and engineering |
-| `docs/METHODS_AND_RESULTS.md` | A short paper on the quantitative methods and results. **Placeholder for now:** leave its placeholder content alone until the human says the project is mature enough to write it. | Data science / quant finance |
+| [Methods and Results](https://akey7.github.io/posts/fuzzy-system-research/) (external blog post, not in this repo) | A short paper on the quantitative methods and results. The human writes and maintains it on their blog; don't recreate it in `docs/`. | Data science / quant finance |
 | `docs/SYSTEM_DESIGN.md` | Data flow from inputs to outputs: the "How the backend works" diagrams, project structure, data folders, scripts, library modules | Engineering |
 | `docs/INTERFACE_CONTRACT.md` | The backend ↔ frontend contract (see "Changing the frontend contract") | Engineering and Claude Code |
 | `docs/INSTALLATION_AND_EXECUTION.md` | Installing, configuring, running, and testing the backend: dependencies, `.env`, command-line flags, "Model settings", "Running the tests" | Engineering |
 
 Intended read orders, which links between documents should support:
 
-- Data science / quant: `README → METHODS_AND_RESULTS → dashboard → source code if curious`
+- Data science / quant: `README → Methods and Results blog post → dashboard → source code if curious`
 - Engineering: `README → SYSTEM_DESIGN → INTERFACE_CONTRACT → tests/source → INSTALLATION_AND_EXECUTION if curious`
 
 Rules for `README.md`:
