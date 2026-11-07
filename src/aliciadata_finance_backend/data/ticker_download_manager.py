@@ -27,7 +27,7 @@ class TickerDownloadManager:
             The list of tickers to download. If left as none, will download
             the tickers given below.
         """
-        load_dotenv()
+        load_dotenv(override=True)
         massive_api_key = os.getenv("MASSIVE_API_KEY")
         self.massive_client = RESTClient(massive_api_key)
         self.dm = DateManager()

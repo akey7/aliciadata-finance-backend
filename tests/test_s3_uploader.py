@@ -11,7 +11,12 @@ from botocore.exceptions import ClientError, NoCredentialsError
 
 from aliciadata_finance_backend.storage import s3_uploader as s3_module
 from aliciadata_finance_backend.storage.s3_uploader import (
+    ACCESS_KEY_ID_ENV,
     BUCKET_NAME_ENV,
+    ENDPOINT_ENV,
+    REGION_ENV,
+    REQUIRED_ENVS,
+    SECRET_ACCESS_KEY_ENV,
     S3Uploader,
     validate_endpoint,
 )
@@ -33,12 +38,20 @@ class FakeClient:
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.setattr(s3_module, "load_dotenv", lambda: None)
+    """
+    Set every required variable, and replace load_dotenv with a stub that
+    records its keyword arguments instead of reading .env.
+    """
+    dotenv_calls: list[dict] = []
+    monkeypatch.setattr(
+        s3_module, "load_dotenv", lambda **kwargs: dotenv_calls.append(kwargs)
+    )
     monkeypatch.setenv(BUCKET_NAME_ENV, SPACE)
-    monkeypatch.setenv("FSF_FRONT_END_BUCKET_ENDPOINT", REGION_ONLY_ENDPOINT)
-    monkeypatch.setenv("FSF_FRONT_END_BUCKET_REGION", "nyc3")
-    monkeypatch.setenv("FSF_FRONT_END_BUCKET_KEY_ID", "test-key-id")
-    monkeypatch.setenv("FSF_FRONT_END_BUCKET_RWDELETE", "test-secret")
+    monkeypatch.setenv(ENDPOINT_ENV, REGION_ONLY_ENDPOINT)
+    monkeypatch.setenv(REGION_ENV, "nyc3")
+    monkeypatch.setenv(ACCESS_KEY_ID_ENV, "test-key-id")
+    monkeypatch.setenv(SECRET_ACCESS_KEY_ENV, "test-secret")
+    return dotenv_calls
 
 
 @pytest.fixture
@@ -64,6 +77,9 @@ def test_upload_uses_space_as_bucket_and_full_key(fake_client, capsys):
         ("local.csv", SPACE, "time-series/2026-10-12/all_forecasts.csv")
     ]
     assert fake_client["kwargs"]["endpoint_url"] == REGION_ONLY_ENDPOINT
+    assert fake_client["kwargs"]["region_name"] == "nyc3"
+    assert fake_client["kwargs"]["aws_access_key_id"] == "test-key-id"
+    assert fake_client["kwargs"]["aws_secret_access_key"] == "test-secret"
     assert "time-series/2026-10-12/all_forecasts.csv successful" in (
         capsys.readouterr().out
     )
@@ -88,10 +104,31 @@ def test_upload_errors_propagate_without_success_message(fake_client, capsys, er
 # Configuration checks
 
 
-def test_missing_space_name_raises(env, monkeypatch):
-    monkeypatch.delenv(BUCKET_NAME_ENV)
-    with pytest.raises(RuntimeError, match=BUCKET_NAME_ENV):
+@pytest.mark.parametrize("missing", REQUIRED_ENVS)
+def test_each_missing_variable_raises(env, monkeypatch, missing):
+    monkeypatch.delenv(missing)
+    with pytest.raises(RuntimeError, match=missing):
         S3Uploader()
+
+
+def test_empty_variable_counts_as_missing(env, monkeypatch):
+    monkeypatch.setenv(SECRET_ACCESS_KEY_ENV, "")
+    with pytest.raises(RuntimeError, match=SECRET_ACCESS_KEY_ENV):
+        S3Uploader()
+
+
+def test_every_missing_variable_is_named(env, monkeypatch):
+    monkeypatch.delenv(ACCESS_KEY_ID_ENV)
+    monkeypatch.delenv(SECRET_ACCESS_KEY_ENV)
+    with pytest.raises(RuntimeError) as excinfo:
+        S3Uploader()
+    assert ACCESS_KEY_ID_ENV in str(excinfo.value)
+    assert SECRET_ACCESS_KEY_ENV in str(excinfo.value)
+
+
+def test_dotenv_values_override_the_shell(env):
+    S3Uploader()
+    assert env == [{"override": True}]
 
 
 @pytest.mark.parametrize(
@@ -103,7 +140,7 @@ def test_missing_space_name_raises(env, monkeypatch):
     ],
 )
 def test_space_specific_endpoints_are_rejected(env, monkeypatch, endpoint):
-    monkeypatch.setenv("FSF_FRONT_END_BUCKET_ENDPOINT", endpoint)
+    monkeypatch.setenv(ENDPOINT_ENV, endpoint)
     with pytest.raises(ValueError, match="region-only"):
         S3Uploader()
 

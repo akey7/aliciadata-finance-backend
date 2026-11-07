@@ -88,7 +88,7 @@ def main() -> None:
     print(f"Using settings from {args.config}: {config.time_series_models}")
     print(f"Using settings from {args.config}: {config.portfolio_optimization}")
     print(f"Using settings from {args.config}: {config.portfolio_backtest}")
-    load_dotenv()
+    load_dotenv(override=True)
     result = run_pipeline(
         upload=not args.no_upload,
         retrain_arima=args.retrain_arima,

@@ -80,11 +80,11 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
                                                   (uploaded last: marks the date complete)
         │
         ▼
- UPLOAD   S3Uploader.upload_file(), to the Space named by FSF_FRONT_END_BUCKET_NAME
+ UPLOAD   S3Uploader.upload_file(), to the Space named by S3_BUCKET_NAME
    output/time_series/<as-of>/*
-       ─►  <FSF_FRONT_END_TIME_SERIES_FOLDER>/<as-of>/*
+       ─►  <S3_TIME_SERIES_FOLDER>/<as-of>/*
    output/portfolio_optimization/<as-of>/*
-       ─►  <FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/<as-of>/*
+       ─►  <S3_PORTFOLIO_OPTIMIZATION_FOLDER>/<as-of>/*
 ```
 
 The local folders mirror the bucket keys (`storage/layout.py` builds both), so each local date folder maps to the same date folder in the Space. `INTERFACE_CONTRACT.md` describes what each uploaded file contains.
@@ -168,7 +168,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
 | `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
-| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`FSF_FRONT_END_BUCKET_NAME`) by full object key; rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
+| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
 
 ## More Engineering Reading
 

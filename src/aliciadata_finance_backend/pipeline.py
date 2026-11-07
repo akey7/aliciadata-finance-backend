@@ -136,8 +136,8 @@ PRICE_DOWNLOAD_FOLDER = os.path.join("input", "annual")
 # Environment variables holding the names of the two top-level folders inside
 # the one frontend Space. Dev and production share the Space and differ only
 # in these folder names.
-PORTFOLIO_FOLDER_ENV = "FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER"
-TIME_SERIES_FOLDER_ENV = "FSF_FRONT_END_TIME_SERIES_FOLDER"
+PORTFOLIO_FOLDER_ENV = "S3_PORTFOLIO_OPTIMIZATION_FOLDER"
+TIME_SERIES_FOLDER_ENV = "S3_TIME_SERIES_FOLDER"
 
 
 class Uploader(Protocol):
@@ -214,11 +214,11 @@ def run_pipeline(
     optimization_metadata.yml is uploaded last, a partially uploaded date is
     never marked complete, and re-running uploads it again.
 
-    The Space name (FSF_FRONT_END_BUCKET_NAME) and the two top-level folder
-    names are read from the environment (load .env before calling). When
-    upload is True they, and the endpoint (via S3Uploader), are checked
-    before any work starts, so a configuration error fails fast instead of
-    after a long ARIMA run.
+    The Space name (S3_BUCKET_NAME) and the two top-level folder names are
+    read from the environment (load .env before calling). When upload is
+    True they, and the endpoint, region, and credentials (via S3Uploader),
+    are checked before any work starts, so a configuration error fails fast
+    instead of after a long ARIMA run.
 
     Parameters
     ----------

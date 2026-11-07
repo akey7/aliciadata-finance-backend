@@ -110,9 +110,11 @@ Put new engineering detail in the matching file under `docs/`, not in the README
 `.env` variable names (names only; never values):
 
 - `MASSIVE_API_KEY` — Massive.com market data API key
-- `FSF_FRONT_END_BUCKET_NAME` — name of the one DigitalOcean Space (S3 bucket); `S3Uploader` passes it as `Bucket` and puts the folder in the key
-- `FSF_FRONT_END_BUCKET_REGION`, `FSF_FRONT_END_BUCKET_RWDELETE`, `FSF_FRONT_END_BUCKET_KEY_ID`, `FSF_FRONT_END_BUCKET_ENDPOINT` (region-only, e.g. `https://nyc3.digitaloceanspaces.com`) — DigitalOcean Spaces region, read/write/delete key, key id, endpoint
-- `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`, `FSF_FRONT_END_TIME_SERIES_FOLDER` — names of the two **top-level folders (key prefixes) inside the one Space** (see `docs/INTERFACE_CONTRACT.md`, "Where the data lives"). Dev and production share the Space and differ only in these folder names. Formerly `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`; the old names are no longer read.
+- `S3_BUCKET_NAME` — name of the one DigitalOcean Space (S3 bucket); `S3Uploader` passes it as `Bucket` and puts the folder in the key
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (read/write/delete key), `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` (region-only, e.g. `https://nyc3.digitaloceanspaces.com`) — boto3's standard names for the Spaces key id, secret, region, and endpoint. `S3Uploader` requires all four and passes them to boto3 explicitly, so boto3 never falls back to other credentials on the machine
+- `S3_PORTFOLIO_OPTIMIZATION_FOLDER`, `S3_TIME_SERIES_FOLDER` — names of the two **top-level folders (key prefixes) inside the one Space** (see `docs/INTERFACE_CONTRACT.md`, "Where the data lives"). Dev and production share the Space and differ only in these folder names
+- Every `load_dotenv()` call passes `override=True`, so `.env` wins over the shell. Keep it that way: the `AWS_*` names are shared with every AWS tool.
+- These replaced the `FSF_FRONT_END_*` names in contract v45 (and, before v13, `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`); old names are no longer read.
 
 The bucket variables point the backend at either dev or production. **Be careful with anything that could upload.** A change to upload logic can overwrite what the live frontend displays. Flag any change that alters what gets uploaded, where, or under what key.
 
