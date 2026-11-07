@@ -1,5 +1,5 @@
 """
-Tests for the output and bucket key layout in fuzzy_system_research.storage.layout.
+Tests for the output and bucket key layout in aliciadata_finance_backend.storage.layout.
 
 In-memory only, except ensure_parent_dir, which writes under pytest's
 tmp_path. Never touches the real input/ or output/ folders.
@@ -10,7 +10,7 @@ import os
 import pandas as pd
 import pytest
 
-from fuzzy_system_research.storage.layout import (
+from aliciadata_finance_backend.storage.layout import (
     ALL_FORECASTS_FILENAME,
     ALL_FORECASTS_METADATA_FILENAME,
     OPTIMIZATION_METADATA_FILENAME,

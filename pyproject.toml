@@ -1,7 +1,7 @@
 [project]
-name = "fuzzy-system-research"
+name = "aliciadata-finance-backend"
 version = "0.1.0"
-description = "Backend for fuzzy-system-finance: ARIMA stock price models and portfolio optimization, uploaded to an S3-compatible bucket."
+description = "Backend for aliciadata-finance-frontend: ARIMA stock price models and portfolio optimization, uploaded to an S3-compatible bucket."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -45,5 +45,5 @@ testpaths = ["tests"]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Hatchling auto-detects the package at src/fuzzy_system_research. uv installs
+# Hatchling auto-detects the package at src/aliciadata_finance_backend. uv installs
 # it in editable mode, so scripts/ can import it with `uv run`.

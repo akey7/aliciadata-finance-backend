@@ -1,5 +1,7 @@
 import sys
-from fuzzy_system_research.data.ticker_download_manager import TickerDownloadManager
+from aliciadata_finance_backend.data.ticker_download_manager import (
+    TickerDownloadManager,
+)
 
 
 def main():

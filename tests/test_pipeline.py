@@ -1,5 +1,5 @@
 """
-Orchestration tests for fuzzy_system_research.pipeline.run_pipeline.
+Orchestration tests for aliciadata_finance_backend.pipeline.run_pipeline.
 
 Downloads, ARIMA training, the risk-free rate history, the NYSE sessions, and
 S3 are replaced by in-memory doubles; files are written only under pytest's tmp_path. Nothing
@@ -15,22 +15,22 @@ import pytest
 import yaml
 
 from conftest import SYNTHETIC_TICKERS, make_long_prices
-from fuzzy_system_research import pipeline
-from fuzzy_system_research.optimization.workflow import InvariantError
-from fuzzy_system_research.config import (
+from aliciadata_finance_backend import pipeline
+from aliciadata_finance_backend.optimization.workflow import InvariantError
+from aliciadata_finance_backend.config import (
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
 )
-from fuzzy_system_research.data.prices import pivot_close_wide
-from fuzzy_system_research.pipeline import (
+from aliciadata_finance_backend.data.prices import pivot_close_wide
+from aliciadata_finance_backend.pipeline import (
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
     price_download_sessions,
     required_sessions,
     run_pipeline,
 )
-from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV
+from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
 SPACE = "test-space"
 TS_FOLDER = "test-time-series"

@@ -20,11 +20,11 @@ import pandas as pd
 from scipy.optimize import minimize
 import pandas_datareader as web
 from dateutil.relativedelta import relativedelta
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
 )
-from fuzzy_system_research.storage.layout import ensure_parent_dir
+from aliciadata_finance_backend.storage.layout import ensure_parent_dir
 
 
 class OptimizationError(RuntimeError):

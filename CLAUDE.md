@@ -1,6 +1,6 @@
-# CLAUDE.md — fuzzy-system-research (backend)
+# CLAUDE.md — aliciadata-finance-backend (backend)
 
-This file guides Claude Code in the **backend** repo only. The frontend (`fuzzy-system-finance`, a Gradio app) is a separate repo and is out of scope here.
+This file guides Claude Code in the **backend** repo only. The frontend (`aliciadata-finance-frontend`, formerly `fuzzy-system-finance`, a Gradio app) is a separate repo and is out of scope here.
 
 ## HARD RESTRICTIONS (read first; these override everything else)
 
@@ -38,7 +38,7 @@ The bucket is the **interface contract** with the frontend. Treat the schema, fi
 
 ## Repo layout
 
-`src/` layout: code that is **run** lives in `scripts/`, code that is **imported** lives in the `fuzzy_system_research` package under `src/`. Scripts import from the package; the package never imports from `scripts/`. Verify against the actual tree before relying on this.
+`src/` layout: code that is **run** lives in `scripts/`, code that is **imported** lives in the `aliciadata_finance_backend` package under `src/`. Scripts import from the package; the package never imports from `scripts/`. Verify against the actual tree before relying on this.
 
 Run from the repo root (paths to `input/` and `output/` are relative to the working directory): `uv run python scripts/<name>.py`.
 
@@ -46,21 +46,21 @@ Run from the repo root (paths to `input/` and `output/` are relative to the work
 | --- | --- | --- | --- |
 | `scripts/run_optimization_and_time_series.py` | The single backend entry point: parses `--no-upload`, `--retrain-arima`, `--refresh-data`, `--workers`, `--config`, loads the config file and `.env`, calls `pipeline.run_pipeline(ts_config=..., po_config=...)` | Yes | Yes |
 | `config/modeling_and_optimization.yml` | Model settings: `time_series_models` (`training_window_length` in closes, `evaluation_window_length` in days) and `portfolio_optimization` (`weight_cap_multiple`, `efficient_frontier_points`, `simulated_portfolios`, `random_seed`, `near_frontier_tolerance`), and `portfolio_backtest` (`training_window_returns`, `rebalance_interval_sessions`); checked in; changing a value changes uploads | No | No |
-| `src/fuzzy_system_research/config.py` | Strict loader (`load_config`, pure `parse_config`) → frozen `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`; read once by the script and passed down, never at import time | No | No |
+| `src/aliciadata_finance_backend/config.py` | Strict loader (`load_config`, pure `parse_config`) → frozen `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`; read once by the script and passed down, never at import time | No | No |
 | `scripts/ticker_download_to_csv.py` | Download one symbol from Massive.com to CSV | Yes | No |
-| `src/fuzzy_system_research/data/ticker_download_manager.py` | Download new data or retrieve cached data | No | No |
-| `src/fuzzy_system_research/data/date_manager.py` | Date and business-day calculations (NYSE calendar via `exchange_calendars`, `nyse_sessions_ending()`) | No | No |
-| `src/fuzzy_system_research/data/prices.py` | Pure helpers: pivot long prices to wide; last N trading sessions | No | No |
-| `src/fuzzy_system_research/optimization/problem.py` | `PortfolioProblem`: the **single definition** of the optimization (estimates, risk-free rate, `bounds()`/`constraints()`, `portfolio_stats()` for every uploaded return/volatility/Sharpe, seeded feasible sampler) and the annualization helpers. Pure. Don't compute portfolio return or volatility anywhere else | No | No |
-| `src/fuzzy_system_research/optimization/portfolio.py` | Max Sharpe, min-variance, max-return optimizers and efficient frontier, all taking a `PortfolioProblem` and returning weights; risk-free rate history and the rate available before a date | No | No |
-| `src/fuzzy_system_research/optimization/workflow.py` | `run_portfolio_optimization()` → `OptimizationResult` (annualized, all via `portfolio_stats()`); capital allocation line; `check_optimization_invariants()` and `verify_optimization_files()` (raise `InvariantError` before upload); `.h5`/`.yml` writers | No | No |
-| `src/fuzzy_system_research/optimization/backtest.py` | `run_portfolio_backtest()` → `BacktestResult`: walk-forward max Sharpe vs. equal weight (each `PortfolioProblem` gets only closes up to its rebalance date; holdings drift between rebalances; failed optimizations use a documented fallback); `check_backtest_prices()`, `check_backtest_invariants()`, `verify_backtest_files()`, `verify_final_optimization()` (the live optimization, recorded as `final_optimization`, must match its files); `.csv`/`.yml` writers | No | No |
-| `src/fuzzy_system_research/forecasting/arima_models.py` | ARIMA training on price data | No | No |
-| `src/fuzzy_system_research/forecasting/ticker_predict.py` | `ArimaWalkForward` (walk-forward ARIMA, all windows fit in one `ProcessPoolExecutor` sized by `default_worker_count()`, half the logical CPUs) and `load_or_train_forecasts()` (per-date cache) | No | No |
-| `src/fuzzy_system_research/forecasting/metrics.py` | Pure forecast-accuracy metrics (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) over the last `evaluation_window_length` scored days; builds and writes `all_forecasts_metadata.yml` | No | No |
-| `src/fuzzy_system_research/pipeline.py` | `run_pipeline()`: one download (long enough for the configured ARIMA windows and the optimization; a too-short cache is downloaded again once) → ARIMA on the last training window + scored sessions (order by lowest BIC) → forecast metrics → optimization on the backtest's training window length, with the last T-bill rate dated before the as-of date (checked, files cross-checked) → backtest (checked, files cross-checked, `final_optimization` checked against the optimization files) → uploads (csv, forecast metrics yml, h5, backtest csv and yml, optimization yml last) only if all succeed; dependencies injectable for tests | No | Yes |
-| `src/fuzzy_system_research/storage/layout.py` | Pure helpers for dated `output/` paths and bucket keys; the single source of truth for both layouts | No | No |
-| `src/fuzzy_system_research/storage/s3_uploader.py` | S3/Spaces upload helper | No | Used by others |
+| `src/aliciadata_finance_backend/data/ticker_download_manager.py` | Download new data or retrieve cached data | No | No |
+| `src/aliciadata_finance_backend/data/date_manager.py` | Date and business-day calculations (NYSE calendar via `exchange_calendars`, `nyse_sessions_ending()`) | No | No |
+| `src/aliciadata_finance_backend/data/prices.py` | Pure helpers: pivot long prices to wide; last N trading sessions | No | No |
+| `src/aliciadata_finance_backend/optimization/problem.py` | `PortfolioProblem`: the **single definition** of the optimization (estimates, risk-free rate, `bounds()`/`constraints()`, `portfolio_stats()` for every uploaded return/volatility/Sharpe, seeded feasible sampler) and the annualization helpers. Pure. Don't compute portfolio return or volatility anywhere else | No | No |
+| `src/aliciadata_finance_backend/optimization/portfolio.py` | Max Sharpe, min-variance, max-return optimizers and efficient frontier, all taking a `PortfolioProblem` and returning weights; risk-free rate history and the rate available before a date | No | No |
+| `src/aliciadata_finance_backend/optimization/workflow.py` | `run_portfolio_optimization()` → `OptimizationResult` (annualized, all via `portfolio_stats()`); capital allocation line; `check_optimization_invariants()` and `verify_optimization_files()` (raise `InvariantError` before upload); `.h5`/`.yml` writers | No | No |
+| `src/aliciadata_finance_backend/optimization/backtest.py` | `run_portfolio_backtest()` → `BacktestResult`: walk-forward max Sharpe vs. equal weight (each `PortfolioProblem` gets only closes up to its rebalance date; holdings drift between rebalances; failed optimizations use a documented fallback); `check_backtest_prices()`, `check_backtest_invariants()`, `verify_backtest_files()`, `verify_final_optimization()` (the live optimization, recorded as `final_optimization`, must match its files); `.csv`/`.yml` writers | No | No |
+| `src/aliciadata_finance_backend/forecasting/arima_models.py` | ARIMA training on price data | No | No |
+| `src/aliciadata_finance_backend/forecasting/ticker_predict.py` | `ArimaWalkForward` (walk-forward ARIMA, all windows fit in one `ProcessPoolExecutor` sized by `default_worker_count()`, half the logical CPUs) and `load_or_train_forecasts()` (per-date cache) | No | No |
+| `src/aliciadata_finance_backend/forecasting/metrics.py` | Pure forecast-accuracy metrics (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) over the last `evaluation_window_length` scored days; builds and writes `all_forecasts_metadata.yml` | No | No |
+| `src/aliciadata_finance_backend/pipeline.py` | `run_pipeline()`: one download (long enough for the configured ARIMA windows and the optimization; a too-short cache is downloaded again once) → ARIMA on the last training window + scored sessions (order by lowest BIC) → forecast metrics → optimization on the backtest's training window length, with the last T-bill rate dated before the as-of date (checked, files cross-checked) → backtest (checked, files cross-checked, `final_optimization` checked against the optimization files) → uploads (csv, forecast metrics yml, h5, backtest csv and yml, optimization yml last) only if all succeed; dependencies injectable for tests | No | Yes |
+| `src/aliciadata_finance_backend/storage/layout.py` | Pure helpers for dated `output/` paths and bucket keys; the single source of truth for both layouts | No | No |
+| `src/aliciadata_finance_backend/storage/s3_uploader.py` | S3/Spaces upload helper | No | Used by others |
 
 `tests/` holds pytest tests (in-memory only; no network, S3, `input/`, or `output/`). The human runs them with `uv run pytest` from the repo root.
 
@@ -110,9 +110,11 @@ Put new engineering detail in the matching file under `docs/`, not in the README
 `.env` variable names (names only; never values):
 
 - `MASSIVE_API_KEY` — Massive.com market data API key
-- `FSF_FRONT_END_BUCKET_NAME` — name of the one DigitalOcean Space (S3 bucket); `S3Uploader` passes it as `Bucket` and puts the folder in the key
-- `FSF_FRONT_END_BUCKET_REGION`, `FSF_FRONT_END_BUCKET_RWDELETE`, `FSF_FRONT_END_BUCKET_KEY_ID`, `FSF_FRONT_END_BUCKET_ENDPOINT` (region-only, e.g. `https://nyc3.digitaloceanspaces.com`) — DigitalOcean Spaces region, read/write/delete key, key id, endpoint
-- `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`, `FSF_FRONT_END_TIME_SERIES_FOLDER` — names of the two **top-level folders (key prefixes) inside the one Space** (see `docs/INTERFACE_CONTRACT.md`, "Where the data lives"). Dev and production share the Space and differ only in these folder names. Formerly `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`; the old names are no longer read.
+- `S3_BUCKET_NAME` — name of the one DigitalOcean Space (S3 bucket); `S3Uploader` passes it as `Bucket` and puts the folder in the key
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (read/write/delete key), `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` (region-only, e.g. `https://nyc3.digitaloceanspaces.com`) — boto3's standard names for the Spaces key id, secret, region, and endpoint. `S3Uploader` requires all four and passes them to boto3 explicitly, so boto3 never falls back to other credentials on the machine
+- `S3_PORTFOLIO_OPTIMIZATION_FOLDER`, `S3_TIME_SERIES_FOLDER` — names of the two **top-level folders (key prefixes) inside the one Space** (see `docs/INTERFACE_CONTRACT.md`, "Where the data lives"). Dev and production share the Space and differ only in these folder names
+- Every `load_dotenv()` call passes `override=True`, so `.env` wins over the shell. Keep it that way: the `AWS_*` names are shared with every AWS tool.
+- These replaced the `FSF_FRONT_END_*` names in contract v45 (and, before v13, `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`); old names are no longer read.
 
 The bucket variables point the backend at either dev or production. **Be careful with anything that could upload.** A change to upload logic can overwrite what the live frontend displays. Flag any change that alters what gets uploaded, where, or under what key.
 

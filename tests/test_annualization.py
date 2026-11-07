@@ -1,5 +1,5 @@
 """
-Tests for the annualization helpers in fuzzy_system_research.optimization.problem.
+Tests for the annualization helpers in aliciadata_finance_backend.optimization.problem.
 
 These are pure functions, so the tests use in-memory values only: no network,
 no S3, and no reads or writes to input/ or output/.
@@ -8,7 +8,7 @@ no S3, and no reads or writes to input/ or output/.
 import numpy as np
 import pytest
 
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     annualize_return,
     annualize_risk,

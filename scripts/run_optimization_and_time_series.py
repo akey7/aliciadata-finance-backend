@@ -15,8 +15,8 @@ Model settings are read from config/modeling_and_optimization.yml (or
 
 import argparse
 from dotenv import load_dotenv
-from fuzzy_system_research.config import DEFAULT_CONFIG_PATH, load_config
-from fuzzy_system_research.pipeline import run_pipeline
+from aliciadata_finance_backend.config import DEFAULT_CONFIG_PATH, load_config
+from aliciadata_finance_backend.pipeline import run_pipeline
 
 
 def positive_int(value: str) -> int:
@@ -88,7 +88,7 @@ def main() -> None:
     print(f"Using settings from {args.config}: {config.time_series_models}")
     print(f"Using settings from {args.config}: {config.portfolio_optimization}")
     print(f"Using settings from {args.config}: {config.portfolio_backtest}")
-    load_dotenv()
+    load_dotenv(override=True)
     result = run_pipeline(
         upload=not args.no_upload,
         retrain_arima=args.retrain_arima,

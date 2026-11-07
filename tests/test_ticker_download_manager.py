@@ -1,6 +1,6 @@
 """
 Unit tests for the download cache in
-fuzzy_system_research.data.ticker_download_manager.
+aliciadata_finance_backend.data.ticker_download_manager.
 
 In-memory only. The manager is built without its constructor (so no API
 client is created), the Massive.com download is replaced by a fake, and files
@@ -13,7 +13,9 @@ import os
 import pandas as pd
 
 from conftest import make_long_prices
-from fuzzy_system_research.data.ticker_download_manager import TickerDownloadManager
+from aliciadata_finance_backend.data.ticker_download_manager import (
+    TickerDownloadManager,
+)
 
 TODAY = "2026-10-14"
 

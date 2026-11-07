@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.forecasting.arima_models: the single
+Tests for aliciadata_finance_backend.forecasting.arima_models: the single
 differencing step (to_log_returns), fitting each (p, q) candidate once on
 the whole training window (fit_order, train_arima), and fit(), which selects
 the lowest-BIC candidate and forecasts with its already-fitted model,
@@ -14,9 +14,9 @@ import pandas as pd
 import pytest
 from numpy.linalg import LinAlgError
 
-from fuzzy_system_research.data.date_manager import DateManager
-from fuzzy_system_research.forecasting import arima_models
-from fuzzy_system_research.forecasting.arima_models import ArimaModels
+from aliciadata_finance_backend.data.date_manager import DateManager
+from aliciadata_finance_backend.forecasting import arima_models
+from aliciadata_finance_backend.forecasting.arima_models import ArimaModels
 
 
 def session_prices(n: int = 21, seed: int = 0) -> pd.Series:

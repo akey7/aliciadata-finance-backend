@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from numpy.linalg import LinAlgError
 import statsmodels.tsa.api as tsa
-from fuzzy_system_research.data.date_manager import DateManager
+from aliciadata_finance_backend.data.date_manager import DateManager
 
 # Number of times prices are differenced before modeling: once, by
 # ArimaModels.to_log_returns(). The models are ARIMA(p, 0, q) on log returns,

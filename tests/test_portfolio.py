@@ -1,5 +1,5 @@
 """
-Unit tests for fuzzy_system_research.optimization.portfolio: the optimizers
+Unit tests for aliciadata_finance_backend.optimization.portfolio: the optimizers
 under the shared PortfolioProblem constraints (including a binding weight
 cap), convergence checks, the maximum return portfolio, the efficient
 frontier and its unreached targets, and the risk-free rate.
@@ -17,8 +17,8 @@ import pytest
 
 from scipy.optimize import OptimizeResult
 
-from fuzzy_system_research.optimization import portfolio
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.optimization import portfolio
+from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     efficient_frontier,
     get_risk_free_rate_history,
@@ -28,7 +28,7 @@ from fuzzy_system_research.optimization.portfolio import (
     min_variance_weights,
     risk_free_rate_before,
 )
-from fuzzy_system_research.optimization.problem import PortfolioProblem
+from aliciadata_finance_backend.optimization.problem import PortfolioProblem
 
 DAILY_RF = 0.01
 
