@@ -25,8 +25,8 @@ import math
 import numpy as np
 import pandas as pd
 import yaml
-from fuzzy_system_research.forecasting.arima_models import PRICE_DIFFERENCING_ORDER
-from fuzzy_system_research.forecasting.ticker_predict import (
+from aliciadata_finance_backend.forecasting.arima_models import PRICE_DIFFERENCING_ORDER
+from aliciadata_finance_backend.forecasting.ticker_predict import (
     ARIMA_MAX_P,
     ARIMA_MAX_Q,
 )

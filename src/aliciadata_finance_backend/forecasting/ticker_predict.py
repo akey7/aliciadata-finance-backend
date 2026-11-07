@@ -8,15 +8,15 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from fuzzy_system_research.data.date_manager import DateManager
-from fuzzy_system_research.forecasting.arima_models import (
+from aliciadata_finance_backend.data.date_manager import DateManager
+from aliciadata_finance_backend.forecasting.arima_models import (
     PRICE_DIFFERENCING_ORDER,
     ArimaModels,
 )
-from fuzzy_system_research.storage.layout import ensure_parent_dir
+from aliciadata_finance_backend.storage.layout import ensure_parent_dir
 
 # The training window length and the number of scored backtest days come from
-# the configuration file (see fuzzy_system_research.config.TimeSeriesConfig).
+# the configuration file (see aliciadata_finance_backend.config.TimeSeriesConfig).
 # ARIMA order search: p in range(ARIMA_MAX_P), q in range(ARIMA_MAX_Q),
 # excluding (0, 0). Each candidate is fit once on the whole training window
 # and the lowest BIC wins (see ArimaModels.select_order()).

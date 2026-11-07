@@ -9,7 +9,7 @@ data):
 
 where <kind> is "portfolio_optimization" or "time_series", and <folder> is
 the top-level folder in the Space for that kind (the value of
-FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER or FSF_FRONT_END_TIME_SERIES_FOLDER). The local path
+S3_PORTFOLIO_OPTIMIZATION_FOLDER or S3_TIME_SERIES_FOLDER). The local path
 minus its "output/<kind>/" part equals the object key minus its "<folder>/"
 part, so the two layouts cannot drift apart. All functions here are pure
 except ensure_parent_dir().
@@ -117,7 +117,7 @@ def object_key(folder: str, as_of: str, filename: str) -> str:
     ----------
     folder : str
         Top-level folder in the Space, i.e. the value of
-        FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER or FSF_FRONT_END_TIME_SERIES_FOLDER.
+        S3_PORTFOLIO_OPTIMIZATION_FOLDER or S3_TIME_SERIES_FOLDER.
 
     as_of : str
         Data as-of date, YYYY-MM-DD.

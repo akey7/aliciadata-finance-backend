@@ -6,8 +6,27 @@ from botocore.client import Config
 
 # Name of the environment variable holding the name of the one frontend
 # Space (S3 bucket). The two top-level folders inside it are named by
-# FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER and FSF_FRONT_END_TIME_SERIES_FOLDER.
-BUCKET_NAME_ENV = "FSF_FRONT_END_BUCKET_NAME"
+# S3_PORTFOLIO_OPTIMIZATION_FOLDER and S3_TIME_SERIES_FOLDER.
+BUCKET_NAME_ENV = "S3_BUCKET_NAME"
+
+# boto3's standard names for the Space's endpoint, region, and the backend's
+# read/write/delete key. They are read here and passed to boto3 explicitly,
+# and every one must be set, so a missing value never makes boto3 fall back
+# to other credentials on the machine (such as ~/.aws/credentials) or to
+# AWS's own endpoint.
+ENDPOINT_ENV = "AWS_ENDPOINT_URL_S3"
+REGION_ENV = "AWS_DEFAULT_REGION"
+ACCESS_KEY_ID_ENV = "AWS_ACCESS_KEY_ID"
+SECRET_ACCESS_KEY_ENV = "AWS_SECRET_ACCESS_KEY"
+
+# Every variable S3Uploader() needs, in the order they are reported missing.
+REQUIRED_ENVS = (
+    BUCKET_NAME_ENV,
+    ENDPOINT_ENV,
+    REGION_ENV,
+    ACCESS_KEY_ID_ENV,
+    SECRET_ACCESS_KEY_ENV,
+)
 
 
 def validate_endpoint(endpoint_url: str | None, bucket_name: str) -> None:
@@ -34,7 +53,7 @@ def validate_endpoint(endpoint_url: str | None, bucket_name: str) -> None:
     host_labels = (parsed.hostname or "").split(".")
     if host_labels[0] == bucket_name or parsed.path.strip("/"):
         raise ValueError(
-            "FSF_FRONT_END_BUCKET_ENDPOINT must be the region-only endpoint "
+            f"{ENDPOINT_ENV} must be the region-only endpoint "
             "(e.g. https://nyc3.digitaloceanspaces.com) without the Space name; "
             f"{BUCKET_NAME_ENV} names the Space."
         )
@@ -48,25 +67,34 @@ class S3Uploader:
 
     def __init__(self):
         """
-        Instantiate class and acquire values from environment variables.
+        Instantiate class and acquire values from environment variables
+        (REQUIRED_ENVS). The .env file is loaded with override=True, so its
+        values win over any of the same names already set in the shell (for
+        example AWS credentials exported for other work).
 
         Raises
         ------
         RuntimeError
-            If FSF_FRONT_END_BUCKET_NAME is not set.
+            If any variable in REQUIRED_ENVS is not set, naming every one
+            that is missing.
 
         ValueError
-            If FSF_FRONT_END_BUCKET_ENDPOINT is not a region-only endpoint
-            (see validate_endpoint()).
+            If AWS_ENDPOINT_URL_S3 is not a region-only endpoint (see
+            validate_endpoint()).
         """
-        load_dotenv()
-        self.endpoint_url = os.getenv("FSF_FRONT_END_BUCKET_ENDPOINT")
-        self.aws_access_key_id = os.getenv("FSF_FRONT_END_BUCKET_KEY_ID")
-        self.aws_secret_access_key = os.getenv("FSF_FRONT_END_BUCKET_RWDELETE")
-        self.region_name = os.getenv("FSF_FRONT_END_BUCKET_REGION")
-        self.bucket_name = os.getenv(BUCKET_NAME_ENV)
-        if not self.bucket_name:
-            raise RuntimeError(f"Environment variable {BUCKET_NAME_ENV} is not set.")
+        load_dotenv(override=True)
+        values = {env: os.getenv(env) for env in REQUIRED_ENVS}
+        missing = [env for env, value in values.items() if not value]
+        if missing:
+            raise RuntimeError(
+                f"Missing environment variable(s) {', '.join(missing)}; "
+                "set them in .env."
+            )
+        self.bucket_name = values[BUCKET_NAME_ENV]
+        self.endpoint_url = values[ENDPOINT_ENV]
+        self.region_name = values[REGION_ENV]
+        self.aws_access_key_id = values[ACCESS_KEY_ID_ENV]
+        self.aws_secret_access_key = values[SECRET_ACCESS_KEY_ENV]
         validate_endpoint(self.endpoint_url, self.bucket_name)
 
     def upload_file(self, local_filename: str, object_key: str) -> None:

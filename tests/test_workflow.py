@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.optimization.workflow on seeded synthetic
+Tests for aliciadata_finance_backend.optimization.workflow on seeded synthetic
 prices: one shared PortfolioProblem behind every coordinate, the capital
 allocation line, the efficient frontier's range, the random feasible
 portfolios, the invariant checks, and the writers. In-memory, except the
@@ -16,18 +16,18 @@ import pytest
 import yaml
 
 from conftest import make_long_prices
-from fuzzy_system_research.config import PortfolioOptimizationConfig
-from fuzzy_system_research.data.prices import pivot_close_wide
-from fuzzy_system_research.optimization import portfolio, workflow
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.config import PortfolioOptimizationConfig
+from aliciadata_finance_backend.data.prices import pivot_close_wide
+from aliciadata_finance_backend.optimization import portfolio, workflow
+from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     max_return_weights,
 )
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.optimization.problem import (
     PortfolioProblem,
     annualize_return,
 )
-from fuzzy_system_research.optimization.workflow import (
+from aliciadata_finance_backend.optimization.workflow import (
     CAPITAL_ALLOCATION_LINE_POINTS,
     OPTIMUM_PORTFOLIO_COMMENT,
     InvariantError,

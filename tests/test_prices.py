@@ -1,12 +1,12 @@
 """
-Tests for fuzzy_system_research.data.prices. In-memory only.
+Tests for aliciadata_finance_backend.data.prices. In-memory only.
 """
 
 import pandas as pd
 import pytest
 
 from conftest import SYNTHETIC_SESSIONS, SYNTHETIC_TICKERS
-from fuzzy_system_research.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
 
 
 def test_pivot_close_wide_shape_columns_and_order(long_prices):

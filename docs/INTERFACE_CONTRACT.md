@@ -1,10 +1,10 @@
-# Interface Contract: fuzzy-system-research (backend) ↔ fuzzy-system-finance (frontend)
+# Interface Contract: aliciadata-finance-backend (backend) ↔ aliciadata-finance-frontend (frontend)
 
 | | |
 | --- | --- |
-| **Contract version** | 42 |
-| **Last updated** | 2026-11-01 |
-| **Source of truth** | `fuzzy-system-research` (backend). The copy in `fuzzy-system-finance` is a mirror. |
+| **Contract version** | 45 |
+| **Last updated** | 2026-11-07 |
+| **Source of truth** | `aliciadata-finance-backend` (backend, formerly `fuzzy-system-research`). The copy in `aliciadata-finance-frontend` (formerly `fuzzy-system-finance`) is a mirror. |
 
 This file is stored **byte-for-byte identically** in both repos. It describes the files the backend uploads to one S3-compatible bucket (a DigitalOcean Space, accessed with `boto3`) and the frontend reads. Treat it as a public API.
 
@@ -30,21 +30,21 @@ All data lives in **one DigitalOcean Space**, which is one S3 bucket. Inside it 
 
 | Environment variable | Meaning |
 | --- | --- |
-| `FSF_FRONT_END_BUCKET_NAME` | Name of the Space (the S3 bucket) |
-| `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER` | Name of the top-level folder holding the optimization files |
-| `FSF_FRONT_END_TIME_SERIES_FOLDER` | Name of the top-level folder holding the ARIMA forecasts |
+| `S3_BUCKET_NAME` | Name of the Space (the S3 bucket) |
+| `S3_PORTFOLIO_OPTIMIZATION_FOLDER` | Name of the top-level folder holding the optimization files |
+| `S3_TIME_SERIES_FOLDER` | Name of the top-level folder holding the ARIMA forecasts |
 
-**Dev and production share the one Space and differ only in the folder names.** Pointing a frontend or backend at dev or production means setting these two folder variables, so both sides must use the same pair of values for the same environment. The folder variables were named `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME` before contract v13; the old names are no longer read.
+**Dev and production share the one Space and differ only in the folder names.** Pointing a frontend or backend at dev or production means setting these two folder variables, so both sides must use the same pair of values for the same environment. Since contract v45 the three variables are named as in the table. Before v45 they were `FSF_FRONT_END_BUCKET_NAME`, `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`, and `FSF_FRONT_END_TIME_SERIES_FOLDER`, and before v13 the folder variables were `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`. The backend reads only the current names.
 
 Every file is stored under a **date prefix** `YYYY-MM-DD/` inside its folder, one date folder per run, so past runs are kept. Full object keys within the Space, where `<X>` means the value of environment variable `X`:
 
 ```
-<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml
-<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_optimization_plot_data.h5
-<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_daily.csv      (since v36)
-<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_metadata.yml   (since v36)
-<FSF_FRONT_END_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv
-<FSF_FRONT_END_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml   (since v21)
+<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml
+<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_optimization_plot_data.h5
+<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_daily.csv      (since v36)
+<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_metadata.yml   (since v36)
+<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv
+<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml   (since v21)
 ```
 
 Dev and production are selected by the configured Space and folder names; the key patterns are identical in both. In this document, **"folder"** means one of these two top-level folders, and **"date folder"** means a `YYYY-MM-DD/` prefix inside one.
@@ -52,7 +52,8 @@ Dev and production are selected by the configured Space and folder names; the ke
 ### Connecting
 
 - **Endpoint:** use the **region-only** endpoint `https://<region>.digitaloceanspaces.com`, pass the **Space name as the S3 `Bucket`**, and pass the full key (starting with the folder name) as the S3 `Key` or `Prefix`.
-- **Space name variable:** both the backend and the frontend read the Space name from `FSF_FRONT_END_BUCKET_NAME`. The backend uploads with `Bucket=<space>` and `Key="<folder>/YYYY-MM-DD/<file>"`, and refuses to run with an endpoint that names the Space.
+- **Space name variable:** both the backend and the frontend read the Space name from `S3_BUCKET_NAME`. The backend uploads with `Bucket=<space>` and `Key="<folder>/YYYY-MM-DD/<file>"`, and refuses to run with an endpoint that names the Space.
+- **Credentials, region, and endpoint** are each side's own configuration, not part of this contract. Since v45 the backend uses boto3's standard names (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`); the frontend may use the same names for its own key, but is not required to.
 - **Avoid the Space-specific endpoint:** do **not** put the Space name in the endpoint host (`https://<space>.<region>.digitaloceanspaces.com`) and pass a folder name as `Bucket`. Uploads happen to land at the right key that way (boto3 sends path-style requests, so the "bucket" becomes the first key segment), but listings fail with `NoSuchKey`.
 
 ### The date prefix
@@ -63,15 +64,15 @@ Dev and production are selected by the configured Space and folder names; the ke
   - For `all_forecasts.csv` it is the last `pred_date` with a non-empty actual price. The final row (the live forecast) is the next trading day after the folder date.
 - **Same-day re-runs** overwrite the files in that date folder. Older dates are never modified or deleted by the backend.
 - **Format:** the date prefix is the **first path segment after the top-level folder**. After removing `<folder>/` from the start of a key, the rest must start with exactly `^\d{4}-\d{2}-\d{2}/`, zero-padded. Lexicographic order equals chronological order.
-- **Stale objects:** readers must **ignore every key whose segment after the folder is not a valid date**. In particular, objects left directly under a folder by contract v8 and earlier (for example `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/optimization_metadata.yml`, `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/portfolio_optimization_plot_data.h5`, `<FSF_FRONT_END_TIME_SERIES_FOLDER>/all_forecasts.csv`) are stale and are no longer written; the human removes them by hand.
+- **Stale objects:** readers must **ignore every key whose segment after the folder is not a valid date**. In particular, objects left directly under a folder by contract v8 and earlier (for example `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/optimization_metadata.yml`, `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/portfolio_optimization_plot_data.h5`, `<S3_TIME_SERIES_FOLDER>/all_forecasts.csv`) are stale and are no longer written; the human removes them by hand.
 - **Retention:** all dates are kept indefinitely. There is no pruning.
 
 ### Which dates are available
 
 A date is **available** only when its data is complete in **both** folders:
 
-1. Key `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml` exists. The backend uploads this file last of all the files for a date, so its presence means both optimization files for that date are complete (and, since v10, that the forecasts were uploaded just before).
-2. Key `<FSF_FRONT_END_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv` exists.
+1. Key `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml` exists. The backend uploads this file last of all the files for a date, so its presence means both optimization files for that date are complete (and, since v10, that the forecasts were uploaded just before).
+2. Key `<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv` exists.
 
 Since v10, one backend run computes everything first and then uploads its files in the order `all_forecasts.csv`, `all_forecasts_metadata.yml` (since v21), `portfolio_optimization_plot_data.h5`, `portfolio_backtest_daily.csv` and `portfolio_backtest_metadata.yml` (since v36), `optimization_metadata.yml`; if any computation fails, nothing is uploaded. Because `optimization_metadata.yml` is last, its presence (for v21+ runs) also means the forecasts metadata is complete, and for v36+ runs that both backtest files are. `all_forecasts_metadata.yml` and the backtest files are not part of the availability rule, since older dates do not have them. Readers must still check both folders, because dates written before v10 came from two separate scripts. Dates present in only one folder (for example, only one of the two pre-v10 scripts was run) are **not** available and must not be offered to users.
 
@@ -112,7 +113,7 @@ General behavior of every file:
 
 ## `optimization_metadata.yml`
 
-**Folder:** `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8. Parse it with a safe YAML loader. Date-like values are written as **quoted strings**, so loaders return strings, not date objects.
+**Folder:** `S3_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8. Parse it with a safe YAML loader. Date-like values are written as **quoted strings**, so loaders return strings, not date objects.
 
 ### Example
 
@@ -278,7 +279,7 @@ random_portfolios:
 
 ## `portfolio_optimization_plot_data.h5`
 
-**Folder:** `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_optimization_plot_data.h5`. **Format:** HDF5 (written with `h5py`). The file has five top-level groups. Each group has exactly two datasets named `xs` and `ys`: one-dimensional float64 arrays of equal length within the group. `xs` is the horizontal axis (volatility), and `ys` is the vertical axis (return). All values are **annualized (arithmetic), in percent** (see "Shared conventions"), and the file contains no dates and no ticker names (use `optimization_metadata.yml` for those).
+**Folder:** `S3_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_optimization_plot_data.h5`. **Format:** HDF5 (written with `h5py`). The file has five top-level groups. Each group has exactly two datasets named `xs` and `ys`: one-dimensional float64 arrays of equal length within the group. `xs` is the horizontal axis (volatility), and `ys` is the vertical axis (return). All values are **annualized (arithmetic), in percent** (see "Shared conventions"), and the file contains no dates and no ticker names (use `optimization_metadata.yml` for those).
 
 ### Root attributes (added in v4)
 
@@ -352,7 +353,7 @@ The frontend may adapt this wording, but it must keep its meaning. Do not hard-c
 
 ## `portfolio_backtest_daily.csv`
 
-**Folder:** `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_daily.csv`. **Format:** CSV with a header row, UTF-8, comma-separated. Read it with the first column as dates, e.g. `pandas.read_csv(..., index_col="date", parse_dates=True)`. *Added in v36; older date folders do not have it, so treat it as optional.*
+**Folder:** `S3_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_daily.csv`. **Format:** CSV with a header row, UTF-8, comma-separated. Read it with the first column as dates, e.g. `pandas.read_csv(..., index_col="date", parse_dates=True)`. *Added in v36; older date folders do not have it, so treat it as optional.*
 
 The realized out-of-sample path of two portfolios over the most recent scored trading days: the maximum Sharpe ratio portfolio, re-optimized on a fixed schedule using only past data, and an equally weighted baseline rebalanced on the same schedule. See `portfolio_backtest_metadata.yml` for the method and the results.
 
@@ -369,7 +370,7 @@ The realized out-of-sample path of two portfolios over the most recent scored tr
 
 ## `portfolio_backtest_metadata.yml`
 
-**Folder:** `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_metadata.yml`, in the same date folder as `portfolio_backtest_daily.csv`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8; parse with a safe YAML loader. Dates are quoted strings. *Added in v36; older date folders do not have it, so treat it as optional.*
+**Folder:** `S3_PORTFOLIO_OPTIMIZATION_FOLDER`. **Key:** `<S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/portfolio_backtest_metadata.yml`, in the same date folder as `portfolio_backtest_daily.csv`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8; parse with a safe YAML loader. Dates are quoted strings. *Added in v36; older date folders do not have it, so treat it as optional.*
 
 ### How the backtest works
 
@@ -545,7 +546,7 @@ units:
 
 ## `all_forecasts.csv`
 
-**Folder:** `FSF_FRONT_END_TIME_SERIES_FOLDER`. **Key:** `<FSF_FRONT_END_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv`. **Format:** CSV with a header row, UTF-8, comma-separated, written by `pandas.DataFrame.to_csv(index=True)` (the index is the first column). Read it with the first column parsed as dates, e.g. `pandas.read_csv(..., index_col="pred_date", parse_dates=True)`.
+**Folder:** `S3_TIME_SERIES_FOLDER`. **Key:** `<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts.csv`. **Format:** CSV with a header row, UTF-8, comma-separated, written by `pandas.DataFrame.to_csv(index=True)` (the index is the first column). Read it with the first column parsed as dates, e.g. `pandas.read_csv(..., index_col="pred_date", parse_dates=True)`.
 
 ### Shape
 
@@ -613,7 +614,7 @@ The file does **not** contain error metrics or confidence intervals. The naive b
 
 ## `all_forecasts_metadata.yml`
 
-**Folder:** `FSF_FRONT_END_TIME_SERIES_FOLDER`. **Key:** `<FSF_FRONT_END_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml`, in the same date folder as `all_forecasts.csv`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8; parse with a safe YAML loader. *Added in v21; date folders written before v21 do not have it, so treat it as optional.*
+**Folder:** `S3_TIME_SERIES_FOLDER`. **Key:** `<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml`, in the same date folder as `all_forecasts.csv`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8; parse with a safe YAML loader. *Added in v21; date folders written before v21 do not have it, so treat it as optional.*
 
 It describes the most recent forecasts in that date's `all_forecasts.csv`: the training window of the live forecast, and how accurate the ARIMA and naive forecasts were over the last `evaluation_window.target_trading_days` trading days with an actual close. Both window lengths are backend settings that can change between runs; this file records the values each run used, so read them here rather than assuming them. The backend computes it from the CSV exactly as uploaded.
 
@@ -727,7 +728,7 @@ units:
 Checked against real backend output (2026-10-11), unless dated otherwise:
 
 - Storage layout (2026-10-12):
-  - **Console (the human):** the account has exactly one Space (bucket), whose name is the value of `FSF_FRONT_END_BUCKET_NAME`, in region `nyc3`.
+  - **Console (the human):** the account has exactly one Space (bucket), whose name is the value of `S3_BUCKET_NAME`, in region `nyc3`.
   - **Programmatic listing** with the recommended configuration (endpoint `https://nyc3.digitaloceanspaces.com`, `ListObjectsV2(Bucket=<space>, Prefix="<folder>/")`) returned exactly these keys:
     - `time-series/2026-10-09/all_forecasts.csv`
     - `portfolio-optimization/2026-10-09/optimization_metadata.yml`
@@ -781,6 +782,9 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 45 | 2026-11-07 | **Configuration rename; no objects move and key strings are unchanged.** The environment variables shared by both sides are renamed to drop the old project prefix: `FSF_FRONT_END_BUCKET_NAME` is now `S3_BUCKET_NAME`, `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER` is now `S3_PORTFOLIO_OPTIMIZATION_FOLDER`, and `FSF_FRONT_END_TIME_SERIES_FOLDER` is now `S3_TIME_SERIES_FOLDER`. Values are unchanged. No fallback: the backend reads only the new names. Its own credential, region, and endpoint variables now use boto3's standard names (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`); they are not part of the contract, and "Connecting" now says so. File names, formats, keys, values, and the upload order are unchanged. Frontend must: read the three new names, rename its Hugging Face secrets and any local `.env` (same values), and drop the old names. Nothing breaks at run time if one side renames first, because each side reads its own environment. Optionally, use the `AWS_*` names for its own credentials. |
+| 44 | 2026-11-07 | Documentation only; no change to files, keys, attributes, columns, types, units, values, or the bucket. The frontend repository is renamed from `fuzzy-system-finance` to `aliciadata-finance-frontend`, so the title and "Source of truth" now use the new name. Frontend: no change required; replace its copy with this file. |
+| 43 | 2026-11-07 | Documentation only; no change to files, keys, attributes, columns, types, units, values, or the bucket. The backend repository is renamed from `fuzzy-system-research` to `aliciadata-finance-backend` ("AliciaData Finance Backend"), so the title and "Source of truth" now use the new name. Environment variable names, folder names, and object keys are unchanged. Frontend: no change required; replace its copy with this file. |
 | 42 | 2026-11-01 | **Additive.** `portfolio_backtest_metadata.yml` gains `metrics.<portfolio>.annualized_volatility` for `max_sharpe` and `equal_weight`: the realized volatility of the portfolio's daily simple returns over the scored days, annualized (sample standard deviation × √252), in percent, and `units.annualized_volatility` (`percent_per_year`). No existing key, column, file, value, unit, or upload order changes. The backend recomputes the value from the wealth series before uploading. A backtest now needs at least 2 scored days, because a standard deviation is undefined for one return; the current setting is well above that. Date folders written before v42 do not have the key unless re-run. Frontend: no change required; optionally show the value; treat it as optional for older dates; do not present it as the same quantity as the in-sample `risk` fields. |
 | 41 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. The backtest text added since v36 no longer asks for text at specific places on the page. Its wording is now suggested: assumptions and limitations go in the collapsible accordion that explains the assumptions of the section showing the backtest, and disclaimers rely on the single "Not investment advice" text at the bottom of the UI, with no additional disclaimer. Frontend: no required change; use the suggested wording in the accordion as you see fit. |
 | 40 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. "Verification status" now records that `final_optimization`, `in_sample`, `max_return_portfolio`, `portfolio_backtest_daily.csv`, and the backtest metrics were checked against the local files of a real run. Still listed as not verified: reading the `.h5` match directly, and the backtest objects in the bucket. Frontend: no change required; replace its copy with this file. |

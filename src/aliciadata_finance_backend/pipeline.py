@@ -41,24 +41,29 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Protocol
 import pandas as pd
-from fuzzy_system_research.config import (
+from aliciadata_finance_backend.config import (
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
 )
-from fuzzy_system_research.data.date_manager import DateManager, nyse_sessions_ending
-from fuzzy_system_research.data.prices import last_n_sessions, pivot_close_wide
-from fuzzy_system_research.data.ticker_download_manager import TickerDownloadManager
-from fuzzy_system_research.forecasting.ticker_predict import (
+from aliciadata_finance_backend.data.date_manager import (
+    DateManager,
+    nyse_sessions_ending,
+)
+from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.ticker_download_manager import (
+    TickerDownloadManager,
+)
+from aliciadata_finance_backend.forecasting.ticker_predict import (
     ArimaWalkForward,
     ForecastTrainer,
     load_or_train_forecasts,
 )
-from fuzzy_system_research.forecasting.metrics import (
+from aliciadata_finance_backend.forecasting.metrics import (
     build_forecast_metadata,
     write_forecast_metadata,
 )
-from fuzzy_system_research.optimization.backtest import (
+from aliciadata_finance_backend.optimization.backtest import (
     build_backtest_metadata,
     build_final_optimization,
     run_portfolio_backtest,
@@ -67,18 +72,18 @@ from fuzzy_system_research.optimization.backtest import (
     write_backtest_daily,
     write_backtest_metadata,
 )
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.optimization.portfolio import (
     get_risk_free_rate_history,
     risk_free_rate_before,
 )
-from fuzzy_system_research.optimization.workflow import (
+from aliciadata_finance_backend.optimization.workflow import (
     build_optimization_metadata,
     run_portfolio_optimization,
     verify_optimization_files,
     write_optimization_metadata,
     write_plot_data_h5,
 )
-from fuzzy_system_research.storage.layout import (
+from aliciadata_finance_backend.storage.layout import (
     ALL_FORECASTS_FILENAME,
     ALL_FORECASTS_METADATA_FILENAME,
     OPTIMIZATION_METADATA_FILENAME,
@@ -93,7 +98,7 @@ from fuzzy_system_research.storage.layout import (
     local_output_path,
     object_key,
 )
-from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV, S3Uploader
+from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV, S3Uploader
 
 # Extra sessions requested from the API beyond required_sessions(), so that an
 # off-by-one in counting sessions, or a session missing from the data, does
@@ -131,8 +136,8 @@ PRICE_DOWNLOAD_FOLDER = os.path.join("input", "annual")
 # Environment variables holding the names of the two top-level folders inside
 # the one frontend Space. Dev and production share the Space and differ only
 # in these folder names.
-PORTFOLIO_FOLDER_ENV = "FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER"
-TIME_SERIES_FOLDER_ENV = "FSF_FRONT_END_TIME_SERIES_FOLDER"
+PORTFOLIO_FOLDER_ENV = "S3_PORTFOLIO_OPTIMIZATION_FOLDER"
+TIME_SERIES_FOLDER_ENV = "S3_TIME_SERIES_FOLDER"
 
 
 class Uploader(Protocol):
@@ -209,11 +214,11 @@ def run_pipeline(
     optimization_metadata.yml is uploaded last, a partially uploaded date is
     never marked complete, and re-running uploads it again.
 
-    The Space name (FSF_FRONT_END_BUCKET_NAME) and the two top-level folder
-    names are read from the environment (load .env before calling). When
-    upload is True they, and the endpoint (via S3Uploader), are checked
-    before any work starts, so a configuration error fails fast instead of
-    after a long ARIMA run.
+    The Space name (S3_BUCKET_NAME) and the two top-level folder names are
+    read from the environment (load .env before calling). When upload is
+    True they, and the endpoint, region, and credentials (via S3Uploader),
+    are checked before any work starts, so a configuration error fails fast
+    instead of after a long ARIMA run.
 
     Parameters
     ----------

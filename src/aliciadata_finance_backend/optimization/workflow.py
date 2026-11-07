@@ -47,15 +47,15 @@ import h5py
 import numpy as np
 import pandas as pd
 import yaml
-from fuzzy_system_research.config import PortfolioOptimizationConfig
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.config import PortfolioOptimizationConfig
+from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     efficient_frontier,
     max_return_weights,
     max_sharpe_weights,
     min_variance_weights,
 )
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
     annualize_return,

@@ -3,7 +3,7 @@
 #
 # Every key is required and unknown keys are rejected, so a typo fails the run
 # instead of silently using a default. Types and minimum values are checked by
-# src/fuzzy_system_research/config.py.
+# src/aliciadata_finance_backend/config.py.
 #
 # Changing a value changes what is uploaded. For time_series_models, re-run
 # with --retrain-arima, because cached forecasts for a date are otherwise

@@ -13,11 +13,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fuzzy_system_research.config import TimeSeriesConfig
-from fuzzy_system_research.data.date_manager import DateManager, nyse_holidays
-from fuzzy_system_research.forecasting import ticker_predict
-from fuzzy_system_research.forecasting.arima_models import ArimaModels
-from fuzzy_system_research.forecasting.ticker_predict import ArimaWalkForward
+from aliciadata_finance_backend.config import TimeSeriesConfig
+from aliciadata_finance_backend.data.date_manager import DateManager, nyse_holidays
+from aliciadata_finance_backend.forecasting import ticker_predict
+from aliciadata_finance_backend.forecasting.arima_models import ArimaModels
+from aliciadata_finance_backend.forecasting.ticker_predict import ArimaWalkForward
 
 
 STUB_UPLIFT = 1.01  # Stub ARIMA forecast = 1 % above the last observed close.
@@ -309,7 +309,9 @@ def test_select_order_does_not_depend_on_row_order(seed):
 
 def test_d_column_is_one_on_every_row_and_survives_csv(tmp_path):
     # ARIMA(p, 0, q) on log returns is ARIMA(p, 1, q) on log prices.
-    from fuzzy_system_research.forecasting.arima_models import PRICE_DIFFERENCING_ORDER
+    from aliciadata_finance_backend.forecasting.arima_models import (
+        PRICE_DIFFERENCING_ORDER,
+    )
 
     assert PRICE_DIFFERENCING_ORDER == 1
     forecasts = ShortWindowWalkForward().train_arima_models(nyse_prices("2026-04-02"))

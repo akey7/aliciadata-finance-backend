@@ -15,12 +15,12 @@ Reference dates (2026):
 import pandas as pd
 import pytest
 
-from fuzzy_system_research.data.date_manager import (
+from aliciadata_finance_backend.data.date_manager import (
     DateManager,
     nyse_holidays,
     nyse_sessions_ending,
 )
-from fuzzy_system_research.forecasting.arima_models import ArimaModels
+from aliciadata_finance_backend.forecasting.arima_models import ArimaModels
 
 
 @pytest.fixture(scope="module")

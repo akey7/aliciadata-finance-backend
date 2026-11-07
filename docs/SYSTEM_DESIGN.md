@@ -12,7 +12,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
 
 ```text
  legend: [external]   module.py   ─► data flow
-         module paths are relative to src/fuzzy_system_research/
+         module paths are relative to src/aliciadata_finance_backend/
 
  scripts/run_optimization_and_time_series.py      entry point
    ├─ config.py ◄── config/modeling_and_optimization.yml
@@ -80,11 +80,11 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
                                                   (uploaded last: marks the date complete)
         │
         ▼
- UPLOAD   S3Uploader.upload_file(), to the Space named by FSF_FRONT_END_BUCKET_NAME
+ UPLOAD   S3Uploader.upload_file(), to the Space named by S3_BUCKET_NAME
    output/time_series/<as-of>/*
-       ─►  <FSF_FRONT_END_TIME_SERIES_FOLDER>/<as-of>/*
+       ─►  <S3_TIME_SERIES_FOLDER>/<as-of>/*
    output/portfolio_optimization/<as-of>/*
-       ─►  <FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER>/<as-of>/*
+       ─►  <S3_PORTFOLIO_OPTIMIZATION_FOLDER>/<as-of>/*
 ```
 
 The local folders mirror the bucket keys (`storage/layout.py` builds both), so each local date folder maps to the same date folder in the Space. `INTERFACE_CONTRACT.md` describes what each uploaded file contains.
@@ -94,7 +94,7 @@ The local folders mirror the bucket keys (`storage/layout.py` builds both), so e
 The repository separates code that you **run** from code that you **import**:
 
 ```
-fuzzy-system-research/
+aliciadata-finance-backend/
 ├── pyproject.toml                # Dependencies, Python version, build config
 ├── uv.lock                       # Exact resolved dependency versions
 ├── config/
@@ -103,7 +103,7 @@ fuzzy-system-research/
 ├── scripts/                      # RUN these: entry points that wire the library together
 │   ├── run_optimization_and_time_series.py
 │   └── ticker_download_to_csv.py
-├── src/fuzzy_system_research/    # IMPORT these: reusable library code, no entry points
+├── src/aliciadata_finance_backend/ # IMPORT these: reusable library code, no entry points
 │   ├── config.py                 # Loads and validates the model settings file
 │   ├── pipeline.py               # One full run: prices → ARIMA → metrics → optimization → backtest → uploads
 │   ├── data/                     # Market data download, caching, price reshaping, and date logic
@@ -115,7 +115,7 @@ fuzzy-system-research/
 └── output/                       # Results of runs (not committed)
 ```
 
-Scripts contain argument handling and orchestration: they decide *what* to run. The package contains the computation and I/O helpers: it knows *how*. Scripts import from the package (for example, `from fuzzy_system_research.pipeline import run_pipeline`), and the package never imports from `scripts/`. This keeps the quantitative code importable and testable without triggering a download or an upload.
+Scripts contain argument handling and orchestration: they decide *what* to run. The package contains the computation and I/O helpers: it knows *how*. Scripts import from the package (for example, `from aliciadata_finance_backend.pipeline import run_pipeline`), and the package never imports from `scripts/`. This keeps the quantitative code importable and testable without triggering a download or an upload.
 
 ### Data folders
 
@@ -153,7 +153,7 @@ Run these directly with `uv run python scripts/<filename>` from the repository r
 
 These modules are imported by the scripts and are not meant to be executed directly.
 
-| Module (under `src/fuzzy_system_research/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
+| Module (under `src/aliciadata_finance_backend/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`. | No |
 | `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache.                                                                               | No                                   |
@@ -168,7 +168,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
 | `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
-| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`FSF_FRONT_END_BUCKET_NAME`) by full object key; rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
+| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
 
 ## More Engineering Reading
 

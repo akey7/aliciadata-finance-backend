@@ -6,7 +6,7 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python versions, virtual 
 
 ### Development Dependencies
 
-Create the `.venv` virtual environment and install production plus development dependencies (the `dev` group is included by default). This also installs the `fuzzy_system_research` package from `src/` in editable mode, so edits to the library code take effect immediately:
+Create the `.venv` virtual environment and install production plus development dependencies (the `dev` group is included by default). This also installs the `aliciadata_finance_backend` package from `src/` in editable mode, so edits to the library code take effect immediately:
 
 ```
 uv sync
@@ -44,7 +44,7 @@ Always run scripts from the repository root, because the scripts read and write 
 
 ### Model settings
 
-Time series, portfolio optimization, and portfolio backtest settings live in `config/modeling_and_optimization.yml`, which is checked into the repository. **For the current values, and what each setting means, consult that file's comments;** the validation rules (types and minimums) are documented in `src/fuzzy_system_research/config.py`. This document deliberately does not repeat the values, so it cannot go out of date when they change.
+Time series, portfolio optimization, and portfolio backtest settings live in `config/modeling_and_optimization.yml`, which is checked into the repository. **For the current values, and what each setting means, consult that file's comments;** the validation rules (types and minimums) are documented in `src/aliciadata_finance_backend/config.py`. This document deliberately does not repeat the values, so it cannot go out of date when they change.
 
 ```yaml
 time_series_models:
@@ -101,13 +101,13 @@ Here are the keys the scripts need to function:
 
 1. `MASSIVE_API_KEY`: Key to Massive.com API for stock and index data. Obtain from API provider.
 
-2. `FSF_FRONT_END_BUCKET_REGION`, `FSF_FRONT_END_BUCKET_RWDELETE`, `FSF_FRONT_END_BUCKET_KEY_ID`, `FSF_FRONT_END_BUCKET_ENDPOINT`: Region, read/write/delete key, key id, and endpoint of the DigitalOcean S3/Spaces bucket. Set as appropriate for development or production environments. Obtain values from DigitalOcean or AWS environments.
+2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region (e.g. `nyc3`), and endpoint of the DigitalOcean Space. These are boto3's standard names. The key needs read/write/delete permission on the Space. `AWS_ENDPOINT_URL_S3` must be the region-only endpoint (e.g. `https://nyc3.digitaloceanspaces.com`) without the Space name; the uploader refuses to run otherwise. Obtain the values from DigitalOcean.
 
-3. `FSF_FRONT_END_BUCKET_NAME`: Name of the one DigitalOcean Space (S3 bucket) that holds all frontend data. `FSF_FRONT_END_BUCKET_ENDPOINT` must be the region-only endpoint (e.g. `https://nyc3.digitaloceanspaces.com`) without the Space name; the uploader refuses to run otherwise.
+3. `S3_BUCKET_NAME`: Name of the one DigitalOcean Space (S3 bucket) that holds all frontend data.
 
-4. `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER` and `FSF_FRONT_END_TIME_SERIES_FOLDER`: names of the two top-level folders inside that Space, holding the portfolio optimization and ARIMA time series data. Dev and production share the Space and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
+4. `S3_PORTFOLIO_OPTIMIZATION_FOLDER` and `S3_TIME_SERIES_FOLDER`: names of the two top-level folders inside that Space, holding the portfolio optimization and ARIMA time series data. Dev and production share the Space and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
 
-Items 2 through 4 connect the backend to the front end.
+Items 2 through 4 connect the backend to the front end. An upload run fails before any work starts if any of them is missing or empty. The scripts load `.env` with its values taking precedence over variables of the same name already set in the shell, so AWS credentials exported for other work are never sent to DigitalOcean. These names replaced the `FSF_FRONT_END_*` names (contract v45); the old names are no longer read.
 
 ## Execution
 

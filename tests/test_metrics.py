@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.forecasting.metrics on hand-made forecast
+Tests for aliciadata_finance_backend.forecasting.metrics on hand-made forecast
 tables whose metrics can be computed by hand. In-memory, except the YAML
 round trip, which writes under pytest's tmp_path.
 """
@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from fuzzy_system_research.forecasting.metrics import (
+from aliciadata_finance_backend.forecasting.metrics import (
     build_forecast_metadata,
     directional_accuracy,
     error_metrics,
