@@ -1,6 +1,6 @@
-# CLAUDE.md — fuzzy-system-research (backend)
+# CLAUDE.md — aliciadata-finance-backend (backend)
 
-This file guides Claude Code in the **backend** repo only. The frontend (`fuzzy-system-finance`, a Gradio app) is a separate repo and is out of scope here.
+This file guides Claude Code in the **backend** repo only. The frontend (`aliciadata-finance-frontend`, formerly `fuzzy-system-finance`, a Gradio app) is a separate repo and is out of scope here.
 
 ## HARD RESTRICTIONS (read first; these override everything else)
 

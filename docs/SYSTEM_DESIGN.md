@@ -94,7 +94,7 @@ The local folders mirror the bucket keys (`storage/layout.py` builds both), so e
 The repository separates code that you **run** from code that you **import**:
 
 ```
-fuzzy-system-research/
+aliciadata-finance-backend/
 ├── pyproject.toml                # Dependencies, Python version, build config
 ├── uv.lock                       # Exact resolved dependency versions
 ├── config/

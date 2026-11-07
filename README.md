@@ -1,8 +1,8 @@
-# Fuzzy System Research
+# AliciaData Finance Backend
 
 **Quantitative finance backend for portfolio optimization and walk-forward financial time-series forecasting.**
 
-Fuzzy System Research is the analytical backend for the [Fuzzy System Finance Dashboard](https://huggingface.co/spaces/akey7/fuzzy-system-finance), an interactive dashboard for exploring portfolio construction and forecast performance using public financial-market data.
+AliciaData Finance Backend is the analytical backend for the [Fuzzy System Finance Dashboard](https://huggingface.co/spaces/akey7/fuzzy-system-finance), an interactive dashboard for exploring portfolio construction and forecast performance using public financial-market data.
 
 The project implements two quantitative workflows:
 

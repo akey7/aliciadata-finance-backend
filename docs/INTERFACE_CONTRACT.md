@@ -1,10 +1,10 @@
-# Interface Contract: fuzzy-system-research (backend) ↔ fuzzy-system-finance (frontend)
+# Interface Contract: aliciadata-finance-backend (backend) ↔ aliciadata-finance-frontend (frontend)
 
 | | |
 | --- | --- |
-| **Contract version** | 42 |
-| **Last updated** | 2026-11-01 |
-| **Source of truth** | `fuzzy-system-research` (backend). The copy in `fuzzy-system-finance` is a mirror. |
+| **Contract version** | 44 |
+| **Last updated** | 2026-11-07 |
+| **Source of truth** | `aliciadata-finance-backend` (backend, formerly `fuzzy-system-research`). The copy in `aliciadata-finance-frontend` (formerly `fuzzy-system-finance`) is a mirror. |
 
 This file is stored **byte-for-byte identically** in both repos. It describes the files the backend uploads to one S3-compatible bucket (a DigitalOcean Space, accessed with `boto3`) and the frontend reads. Treat it as a public API.
 
@@ -781,6 +781,8 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 44 | 2026-11-07 | Documentation only; no change to files, keys, attributes, columns, types, units, values, or the bucket. The frontend repository is renamed from `fuzzy-system-finance` to `aliciadata-finance-frontend`, so the title and "Source of truth" now use the new name. Frontend: no change required; replace its copy with this file. |
+| 43 | 2026-11-07 | Documentation only; no change to files, keys, attributes, columns, types, units, values, or the bucket. The backend repository is renamed from `fuzzy-system-research` to `aliciadata-finance-backend` ("AliciaData Finance Backend"), so the title and "Source of truth" now use the new name. Environment variable names, folder names, and object keys are unchanged. Frontend: no change required; replace its copy with this file. |
 | 42 | 2026-11-01 | **Additive.** `portfolio_backtest_metadata.yml` gains `metrics.<portfolio>.annualized_volatility` for `max_sharpe` and `equal_weight`: the realized volatility of the portfolio's daily simple returns over the scored days, annualized (sample standard deviation × √252), in percent, and `units.annualized_volatility` (`percent_per_year`). No existing key, column, file, value, unit, or upload order changes. The backend recomputes the value from the wealth series before uploading. A backtest now needs at least 2 scored days, because a standard deviation is undefined for one return; the current setting is well above that. Date folders written before v42 do not have the key unless re-run. Frontend: no change required; optionally show the value; treat it as optional for older dates; do not present it as the same quantity as the in-sample `risk` fields. |
 | 41 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. The backtest text added since v36 no longer asks for text at specific places on the page. Its wording is now suggested: assumptions and limitations go in the collapsible accordion that explains the assumptions of the section showing the backtest, and disclaimers rely on the single "Not investment advice" text at the bottom of the UI, with no additional disclaimer. Frontend: no required change; use the suggested wording in the accordion as you see fit. |
 | 40 | 2026-11-01 | Documentation only; no change to files, keys, attributes, columns, types, units, or values. "Verification status" now records that `final_optimization`, `in_sample`, `max_return_portfolio`, `portfolio_backtest_daily.csv`, and the backtest metrics were checked against the local files of a real run. Still listed as not verified: reading the `.h5` match directly, and the backtest objects in the bucket. Frontend: no change required; replace its copy with this file. |
