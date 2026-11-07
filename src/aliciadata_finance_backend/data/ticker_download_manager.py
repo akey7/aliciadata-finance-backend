@@ -3,8 +3,8 @@ import time
 import pandas as pd
 from dotenv import load_dotenv
 from massive import RESTClient
-from fuzzy_system_research.data.date_manager import DateManager
-from fuzzy_system_research.storage.layout import ensure_parent_dir
+from aliciadata_finance_backend.data.date_manager import DateManager
+from aliciadata_finance_backend.storage.layout import ensure_parent_dir
 
 
 class TickerDownloadManager:

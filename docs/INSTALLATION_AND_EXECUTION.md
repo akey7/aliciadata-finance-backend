@@ -6,7 +6,7 @@ This project uses [uv](https://docs.astral.sh/uv/) for Python versions, virtual 
 
 ### Development Dependencies
 
-Create the `.venv` virtual environment and install production plus development dependencies (the `dev` group is included by default). This also installs the `fuzzy_system_research` package from `src/` in editable mode, so edits to the library code take effect immediately:
+Create the `.venv` virtual environment and install production plus development dependencies (the `dev` group is included by default). This also installs the `aliciadata_finance_backend` package from `src/` in editable mode, so edits to the library code take effect immediately:
 
 ```
 uv sync
@@ -44,7 +44,7 @@ Always run scripts from the repository root, because the scripts read and write 
 
 ### Model settings
 
-Time series, portfolio optimization, and portfolio backtest settings live in `config/modeling_and_optimization.yml`, which is checked into the repository. **For the current values, and what each setting means, consult that file's comments;** the validation rules (types and minimums) are documented in `src/fuzzy_system_research/config.py`. This document deliberately does not repeat the values, so it cannot go out of date when they change.
+Time series, portfolio optimization, and portfolio backtest settings live in `config/modeling_and_optimization.yml`, which is checked into the repository. **For the current values, and what each setting means, consult that file's comments;** the validation rules (types and minimums) are documented in `src/aliciadata_finance_backend/config.py`. This document deliberately does not repeat the values, so it cannot go out of date when they change.
 
 ```yaml
 time_series_models:

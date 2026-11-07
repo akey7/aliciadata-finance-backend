@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.optimization.backtest: the rebalance schedule,
+Tests for aliciadata_finance_backend.optimization.backtest: the rebalance schedule,
 temporal leakage, missing data, weight drift, wealth compounding, drawdown, the
 optimization fallback, the invariants, the two written files, and the match
 between final_optimization and the live optimization's files.
@@ -16,9 +16,9 @@ import pandas as pd
 import pytest
 import yaml
 
-from fuzzy_system_research.config import PortfolioOptimizationConfig
-from fuzzy_system_research.optimization import backtest
-from fuzzy_system_research.optimization.backtest import (
+from aliciadata_finance_backend.config import PortfolioOptimizationConfig
+from aliciadata_finance_backend.optimization import backtest
+from aliciadata_finance_backend.optimization.backtest import (
     STATUS_FALLBACK_EQUAL,
     STATUS_FALLBACK_PREVIOUS,
     STATUS_OPTIMIZED,
@@ -36,12 +36,12 @@ from fuzzy_system_research.optimization.backtest import (
     write_backtest_daily,
     write_backtest_metadata,
 )
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     risk_free_rate_before,
 )
-from fuzzy_system_research.optimization.problem import PortfolioProblem
-from fuzzy_system_research.optimization.workflow import (
+from aliciadata_finance_backend.optimization.problem import PortfolioProblem
+from aliciadata_finance_backend.optimization.workflow import (
     InvariantError,
     build_optimization_metadata,
     run_portfolio_optimization,

@@ -12,7 +12,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
 
 ```text
  legend: [external]   module.py   ─► data flow
-         module paths are relative to src/fuzzy_system_research/
+         module paths are relative to src/aliciadata_finance_backend/
 
  scripts/run_optimization_and_time_series.py      entry point
    ├─ config.py ◄── config/modeling_and_optimization.yml
@@ -103,7 +103,7 @@ aliciadata-finance-backend/
 ├── scripts/                      # RUN these: entry points that wire the library together
 │   ├── run_optimization_and_time_series.py
 │   └── ticker_download_to_csv.py
-├── src/fuzzy_system_research/    # IMPORT these: reusable library code, no entry points
+├── src/aliciadata_finance_backend/ # IMPORT these: reusable library code, no entry points
 │   ├── config.py                 # Loads and validates the model settings file
 │   ├── pipeline.py               # One full run: prices → ARIMA → metrics → optimization → backtest → uploads
 │   ├── data/                     # Market data download, caching, price reshaping, and date logic
@@ -115,7 +115,7 @@ aliciadata-finance-backend/
 └── output/                       # Results of runs (not committed)
 ```
 
-Scripts contain argument handling and orchestration: they decide *what* to run. The package contains the computation and I/O helpers: it knows *how*. Scripts import from the package (for example, `from fuzzy_system_research.pipeline import run_pipeline`), and the package never imports from `scripts/`. This keeps the quantitative code importable and testable without triggering a download or an upload.
+Scripts contain argument handling and orchestration: they decide *what* to run. The package contains the computation and I/O helpers: it knows *how*. Scripts import from the package (for example, `from aliciadata_finance_backend.pipeline import run_pipeline`), and the package never imports from `scripts/`. This keeps the quantitative code importable and testable without triggering a download or an upload.
 
 ### Data folders
 
@@ -153,7 +153,7 @@ Run these directly with `uv run python scripts/<filename>` from the repository r
 
 These modules are imported by the scripts and are not meant to be executed directly.
 
-| Module (under `src/fuzzy_system_research/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
+| Module (under `src/aliciadata_finance_backend/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`. | No |
 | `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache.                                                                               | No                                   |

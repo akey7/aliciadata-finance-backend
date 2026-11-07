@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.storage.s3_uploader.
+Tests for aliciadata_finance_backend.storage.s3_uploader.
 
 boto3 is replaced with an in-memory fake, load_dotenv is disabled, and the
 environment is set with monkeypatch, so no network call is made and the real
@@ -9,8 +9,8 @@ environment is set with monkeypatch, so no network call is made and the real
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from fuzzy_system_research.storage import s3_uploader as s3_module
-from fuzzy_system_research.storage.s3_uploader import (
+from aliciadata_finance_backend.storage import s3_uploader as s3_module
+from aliciadata_finance_backend.storage.s3_uploader import (
     BUCKET_NAME_ENV,
     S3Uploader,
     validate_endpoint,

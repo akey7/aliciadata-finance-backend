@@ -64,18 +64,18 @@ import h5py
 import numpy as np
 import pandas as pd
 import yaml
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     max_sharpe_weights,
     risk_free_rate_before,
 )
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
     PortfolioStats,
     annualize_risk,
 )
-from fuzzy_system_research.optimization.workflow import (
+from aliciadata_finance_backend.optimization.workflow import (
     EXACT_RELATIVE_TOLERANCE,
     WEIGHT_TOLERANCE,
     InvariantError,

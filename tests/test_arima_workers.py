@@ -1,6 +1,6 @@
 """
 Tests for how ARIMA training is spread over worker processes in
-fuzzy_system_research.forecasting.ticker_predict: the default worker count,
+aliciadata_finance_backend.forecasting.ticker_predict: the default worker count,
 the single-thread environment for workers, and fit_windows().
 
 One test starts a real pool of 2 worker processes and fits the real
@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fuzzy_system_research.data.date_manager import DateManager
-from fuzzy_system_research.forecasting import ticker_predict
-from fuzzy_system_research.forecasting.ticker_predict import (
+from aliciadata_finance_backend.data.date_manager import DateManager
+from aliciadata_finance_backend.forecasting import ticker_predict
+from aliciadata_finance_backend.forecasting.ticker_predict import (
     SINGLE_THREAD_ENV_VARS,
     default_worker_count,
     fit_windows,

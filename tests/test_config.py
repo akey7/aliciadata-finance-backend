@@ -1,5 +1,5 @@
 """
-Tests for fuzzy_system_research.config: strict parsing and validation of the
+Tests for aliciadata_finance_backend.config: strict parsing and validation of the
 time series, portfolio optimization, and portfolio backtest settings, loading
 from a YAML file, and the repository's own
 config/modeling_and_optimization.yml.
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fuzzy_system_research.config import (
+from aliciadata_finance_backend.config import (
     DEFAULT_CONFIG_PATH,
     MIN_BACKTEST_TRAINING_RETURNS,
     MIN_TRAINING_WINDOW_LENGTH,

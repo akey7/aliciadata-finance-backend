@@ -41,24 +41,29 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Protocol
 import pandas as pd
-from fuzzy_system_research.config import (
+from aliciadata_finance_backend.config import (
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
 )
-from fuzzy_system_research.data.date_manager import DateManager, nyse_sessions_ending
-from fuzzy_system_research.data.prices import last_n_sessions, pivot_close_wide
-from fuzzy_system_research.data.ticker_download_manager import TickerDownloadManager
-from fuzzy_system_research.forecasting.ticker_predict import (
+from aliciadata_finance_backend.data.date_manager import (
+    DateManager,
+    nyse_sessions_ending,
+)
+from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.ticker_download_manager import (
+    TickerDownloadManager,
+)
+from aliciadata_finance_backend.forecasting.ticker_predict import (
     ArimaWalkForward,
     ForecastTrainer,
     load_or_train_forecasts,
 )
-from fuzzy_system_research.forecasting.metrics import (
+from aliciadata_finance_backend.forecasting.metrics import (
     build_forecast_metadata,
     write_forecast_metadata,
 )
-from fuzzy_system_research.optimization.backtest import (
+from aliciadata_finance_backend.optimization.backtest import (
     build_backtest_metadata,
     build_final_optimization,
     run_portfolio_backtest,
@@ -67,18 +72,18 @@ from fuzzy_system_research.optimization.backtest import (
     write_backtest_daily,
     write_backtest_metadata,
 )
-from fuzzy_system_research.optimization.portfolio import (
+from aliciadata_finance_backend.optimization.portfolio import (
     get_risk_free_rate_history,
     risk_free_rate_before,
 )
-from fuzzy_system_research.optimization.workflow import (
+from aliciadata_finance_backend.optimization.workflow import (
     build_optimization_metadata,
     run_portfolio_optimization,
     verify_optimization_files,
     write_optimization_metadata,
     write_plot_data_h5,
 )
-from fuzzy_system_research.storage.layout import (
+from aliciadata_finance_backend.storage.layout import (
     ALL_FORECASTS_FILENAME,
     ALL_FORECASTS_METADATA_FILENAME,
     OPTIMIZATION_METADATA_FILENAME,
@@ -93,7 +98,7 @@ from fuzzy_system_research.storage.layout import (
     local_output_path,
     object_key,
 )
-from fuzzy_system_research.storage.s3_uploader import BUCKET_NAME_ENV, S3Uploader
+from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV, S3Uploader
 
 # Extra sessions requested from the API beyond required_sessions(), so that an
 # off-by-one in counting sessions, or a session missing from the data, does

@@ -1,5 +1,5 @@
 """
-Unit tests for fuzzy_system_research.optimization.problem.PortfolioProblem:
+Unit tests for aliciadata_finance_backend.optimization.problem.PortfolioProblem:
 estimation from prices, the shared constraint set, portfolio_stats(), and
 the feasible-set sampler. In-memory only.
 """
@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 
 from conftest import make_long_prices
-from fuzzy_system_research.data.prices import pivot_close_wide
-from fuzzy_system_research.optimization.problem import (
+from aliciadata_finance_backend.data.prices import pivot_close_wide
+from aliciadata_finance_backend.optimization.problem import (
     PortfolioProblem,
     PortfolioStats,
 )
