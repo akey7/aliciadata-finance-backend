@@ -84,7 +84,7 @@ Human-facing documentation lives in `README.md` and `docs/`. The priority audien
 | File | Purpose | Audience |
 | --- | --- | --- |
 | `README.md` | Abstract of the project, and a "Documentation" section pointing to the other documents | Data science / quant and engineering |
-| [Methods and Results](https://akey7.github.io/posts/fuzzy-system-research/) (external blog post, not in this repo) | A short paper on the quantitative methods and results. The human writes and maintains it on their blog; don't recreate it in `docs/`. | Data science / quant finance |
+| [Methods and Results](https://akey7.github.io/posts/aliciadata-finance/) (external blog post, not in this repo) | A short paper on the quantitative methods and results. The human writes and maintains it on their blog; don't recreate it in `docs/`. | Data science / quant finance |
 | `docs/SYSTEM_DESIGN.md` | Data flow from inputs to outputs: the "How the backend works" diagrams, project structure, data folders, scripts, library modules | Engineering |
 | `docs/INTERFACE_CONTRACT.md` | The backend ↔ frontend contract (see "Changing the frontend contract") | Engineering and Claude Code |
 | `docs/INSTALLATION_AND_EXECUTION.md` | Installing, configuring, running, and testing the backend: dependencies, `.env`, command-line flags, "Model settings", "Running the tests" | Engineering |

@@ -15,7 +15,7 @@ This project is intended both as a quantitative-methods demonstration and as an 
 
 ## Documentation
 
-**Quantitative methods and interpretation:** [Methods and Results (blog post)](https://akey7.github.io/posts/fuzzy-system-research/)
+**Quantitative methods and interpretation:** [Methods and Results (blog post)](https://akey7.github.io/posts/aliciadata-finance/)
 
 **System Design:** [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)
 
