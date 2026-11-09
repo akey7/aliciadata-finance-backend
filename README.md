@@ -2,7 +2,7 @@
 
 **Quantitative finance backend for portfolio optimization and walk-forward financial time-series forecasting.**
 
-AliciaData Finance Backend is the analytical backend for an [interactive dashboard](https://huggingface.co/spaces/akey7/fuzzy-system-finance) for exploring portfolio construction and forecast performance using public financial-market data.
+AliciaData Finance Backend is the analytical backend for an [interactive dashboard](https://aliciadata.com) for exploring portfolio construction and forecast performance using public financial-market data.
 
 The project implements two quantitative workflows:
 
@@ -15,7 +15,7 @@ This project is intended both as a quantitative-methods demonstration and as an 
 
 ## Documentation
 
-**Quantitative methods and interpretation:** [Methods and Results (blog post)](https://akey7.github.io/posts/fuzzy-system-research/)
+**Quantitative methods and interpretation:** [Methods and Results (blog post)](https://akey7.github.io/posts/aliciadata-finance/)
 
 **System Design:** [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)
 
@@ -25,5 +25,5 @@ This project is intended both as a quantitative-methods demonstration and as an 
 
 ## Related Links
 
-- **Live dashboard:** [Hugging Face Space](https://huggingface.co/spaces/akey7/fuzzy-system-finance)
+- **Live dashboard:** [aliciadata.com](https://aliciadata.com)
 - **Frontend repository:** [akey7/aliciadata-finance-frontend](https://github.com/akey7/aliciadata-finance-frontend)
