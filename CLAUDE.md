@@ -91,7 +91,7 @@ Human-facing documentation lives in `README.md` and `docs/`. The priority audien
 
 Intended read orders, which links between documents should support:
 
-- Data science / quant: `README → Methods and Results blog post → dashboard → source code if curious`
+- Data science / quant: `README → Methods and Results blog post → dashboard (https://aliciadata.com) → source code if curious`
 - Engineering: `README → SYSTEM_DESIGN → INTERFACE_CONTRACT → tests/source → INSTALLATION_AND_EXECUTION if curious`
 
 Rules for `README.md`:
