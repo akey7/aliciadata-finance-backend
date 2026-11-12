@@ -13,7 +13,7 @@ File layout:
 
     time_series_models:
       training_window_length: <int>    # closes per ARIMA training window
-      evaluation_window_length: <int>  # backtest days scored
+      evaluation_window_length: <int>  # forecast days scored
     portfolio_optimization:
       weight_cap_multiple: <number>     # cap = multiple / number of tickers
       efficient_frontier_points: <int>  # target returns on the frontier
@@ -22,10 +22,12 @@ File layout:
       near_frontier_tolerance: <number> # pp of return counted as "near" the frontier
     portfolio_backtest:
       training_window_returns: <int>     # daily returns per optimization, live too
+      evaluation_window_length: <int>    # backtest days scored
       rebalance_interval_sessions: <int> # trading sessions between rebalances
 
-The backtest scores the same number of days as the forecasts
-(time_series_models.evaluation_window_length) and uses the same weight cap as
+The backtest scores its own number of days
+(portfolio_backtest.evaluation_window_length), independent of the forecasts'
+(time_series_models.evaluation_window_length), and uses the same weight cap as
 the optimization (portfolio_optimization.weight_cap_multiple).
 
 The current values are in the file itself.
@@ -44,6 +46,9 @@ MIN_TRAINING_WINDOW_LENGTH = 30
 # Smallest backtest training window accepted, in daily returns. Far fewer than
 # this would leave the covariance matrix of the tickers singular or meaningless.
 MIN_BACKTEST_TRAINING_RETURNS = 30
+# Smallest backtest accepted, in scored days: the realized volatility is a
+# standard deviation, which needs at least two daily returns.
+MIN_BACKTEST_EVALUATION_DAYS = 2
 
 
 class ConfigError(ValueError):
@@ -82,8 +87,10 @@ class TimeSeriesConfig:
         MIN_TRAINING_WINDOW_LENGTH.
 
     evaluation_window_length : int
-        Most recent trading days with an actual close that are backtested
-        and scored: one forecast each, plus the live forecast. At least 1.
+        Most recent trading days with an actual close whose forecasts are
+        scored: one forecast each, plus the live forecast. At least 1. The
+        portfolio backtest has its own length
+        (PortfolioBacktestConfig.evaluation_window_length).
     """
 
     training_window_length: int
@@ -188,13 +195,22 @@ class PortfolioBacktestConfig:
         so the two can be compared. The window holds one more close than
         this. At least MIN_BACKTEST_TRAINING_RETURNS.
 
+    evaluation_window_length : int
+        Most recent trading days scored by the backtest: the wealth series
+        has one more value than this. Independent of the forecasts' scored
+        days (TimeSeriesConfig.evaluation_window_length), so the two
+        evaluations can cover different periods. At least
+        MIN_BACKTEST_EVALUATION_DAYS, and a multiple of
+        rebalance_interval_sessions, so the scored days fall into whole
+        holding periods.
+
     rebalance_interval_sessions : int
         Trading sessions between rebalances, and so in each holding period.
-        At least 1. ModelingConfig checks that it divides the number of
-        scored days exactly.
+        At least 1.
     """
 
     training_window_returns: int
+    evaluation_window_length: int
     rebalance_interval_sessions: int
 
     def __post_init__(self) -> None:
@@ -205,47 +221,51 @@ class PortfolioBacktestConfig:
             BACKTEST_SECTION,
         )
         _require_int(
+            "evaluation_window_length",
+            self.evaluation_window_length,
+            MIN_BACKTEST_EVALUATION_DAYS,
+            BACKTEST_SECTION,
+        )
+        _require_int(
             "rebalance_interval_sessions",
             self.rebalance_interval_sessions,
             1,
             BACKTEST_SECTION,
         )
+        if self.evaluation_window_length % self.rebalance_interval_sessions != 0:
+            raise ConfigError(
+                f"{BACKTEST_SECTION}.evaluation_window_length "
+                f"({self.evaluation_window_length}) must be a multiple of "
+                f"{BACKTEST_SECTION}.rebalance_interval_sessions "
+                f"({self.rebalance_interval_sessions})."
+            )
 
     @property
     def training_window_closes(self) -> int:
         """Closes in each training window: one more than daily returns."""
         return self.training_window_returns + 1
 
-    def sessions_needed(self, evaluation_days: int) -> int:
+    @property
+    def sessions_needed(self) -> int:
         """
         Most recent trading sessions the backtest needs: one training
         window's closes, ending on the first rebalance date, plus one
-        session per scored day: training_window_closes + evaluation_days.
+        session per scored day: training_window_closes +
+        evaluation_window_length.
         """
-        return self.training_window_closes + evaluation_days
+        return self.training_window_closes + self.evaluation_window_length
 
 
 @dataclass(frozen=True)
 class ModelingConfig:
     """
-    The whole configuration file: one field per section. Validated on
-    construction: the backtest's scored days must fall into whole holding
-    periods.
+    The whole configuration file: one field per section. Each section
+    validates itself on construction.
     """
 
     time_series_models: TimeSeriesConfig
     portfolio_optimization: PortfolioOptimizationConfig
     portfolio_backtest: PortfolioBacktestConfig
-
-    def __post_init__(self) -> None:
-        evaluation_days = self.time_series_models.evaluation_window_length
-        interval = self.portfolio_backtest.rebalance_interval_sessions
-        if evaluation_days % interval != 0:
-            raise ConfigError(
-                f"time_series_models.evaluation_window_length ({evaluation_days}) must "
-                f"be a multiple of {BACKTEST_SECTION}.rebalance_interval_sessions "
-                f"({interval})."
-            )
 
 
 def _check_keys(section: str, mapping: object, expected: set[str]) -> dict:
@@ -306,7 +326,11 @@ def parse_config(raw: object) -> ModelingConfig:
     bt = _check_keys(
         BACKTEST_SECTION,
         top[BACKTEST_SECTION],
-        {"training_window_returns", "rebalance_interval_sessions"},
+        {
+            "training_window_returns",
+            "evaluation_window_length",
+            "rebalance_interval_sessions",
+        },
     )
     return ModelingConfig(
         time_series_models=TimeSeriesConfig(
@@ -322,6 +346,7 @@ def parse_config(raw: object) -> ModelingConfig:
         ),
         portfolio_backtest=PortfolioBacktestConfig(
             training_window_returns=bt["training_window_returns"],
+            evaluation_window_length=bt["evaluation_window_length"],
             rebalance_interval_sessions=bt["rebalance_interval_sessions"],
         ),
     )

@@ -51,19 +51,26 @@ PO_CONFIG = PortfolioOptimizationConfig(
     random_seed=0,
     near_frontier_tolerance=1.0,
 )
+# The backtest scores its own number of days (30), different from the
+# forecasts' (20), so the tests can tell the two settings apart.
 BT_CONFIG = PortfolioBacktestConfig(
-    training_window_returns=252, rebalance_interval_sessions=5
+    training_window_returns=252,
+    evaluation_window_length=30,
+    rebalance_interval_sessions=5,
 )
-BACKTEST_SESSIONS = BT_CONFIG.sessions_needed(EVALUATION_DAYS)
+BACKTEST_DAYS = BT_CONFIG.evaluation_window_length
+BACKTEST_SESSIONS = BT_CONFIG.sessions_needed
 REQUIRED_SESSIONS = required_sessions(TS_CONFIG, BT_CONFIG)
 PRICE_DOWNLOAD_SESSIONS = price_download_sessions(TS_CONFIG, BT_CONFIG)
 # A full download: as many sessions as the pipeline requests.
 N_SESSIONS = PRICE_DOWNLOAD_SESSIONS
 
 
-def fake_risk_free_history(dm) -> pd.DataFrame:
+def fake_risk_free_history(dm, first_date: pd.Timestamp) -> pd.DataFrame:
     # Covers every session of the synthetic prices, starting before them, and
-    # changes daily, so a rate from the wrong date is visible.
+    # changes daily, so a rate from the wrong date is visible. first_date is
+    # ignored; test_risk_free_history_is_requested_from_the_first_rebalance
+    # checks it.
     dates = pd.bdate_range("2026-06-01", periods=N_SESSIONS + 60)
     return pd.DataFrame({"DTB3": np.linspace(3.0, 5.0, len(dates))}, index=dates)
 
@@ -234,7 +241,7 @@ def test_single_download_of_enough_sessions_with_cache(upload_env, deps):
     tdm, _, _, kwargs = deps
     run_pipeline(**kwargs)
     assert ARIMA_WINDOW_SESSIONS == 272
-    assert REQUIRED_SESSIONS == BACKTEST_SESSIONS == 273  # One more than ARIMA.
+    assert REQUIRED_SESSIONS == BACKTEST_SESSIONS == 283  # 253 closes + 30 days.
     assert PRICE_DOWNLOAD_SESSIONS > REQUIRED_SESSIONS  # A small margin.
     assert tdm.calls == [{"days_in_past": PRICE_DOWNLOAD_SESSIONS, "use_cache": True}]
 
@@ -248,8 +255,8 @@ def test_settings_flow_from_the_config_into_every_step(upload_env, deps):
     tdm = FakeTickerDownloadManager(make_long_prices(n_sessions=N_SESSIONS))
     kwargs.update(ts_config=ts_config, trainer=trainer, tdm=tdm)
     result = run_pipeline(**kwargs)
-    # The backtest's 263 sessions are now the largest need, plus the margin.
-    assert required_sessions(ts_config, BT_CONFIG) == 263
+    # The backtest's 283 sessions are still the largest need, plus the margin.
+    assert required_sessions(ts_config, BT_CONFIG) == 283
     assert tdm.calls[0]["days_in_past"] == price_download_sessions(ts_config, BT_CONFIG)
     (window,) = trainer.calls
     assert len(window) == 110  # 100 closes + 10 scored days.
@@ -352,7 +359,7 @@ def test_optimization_uses_the_last_rate_dated_before_the_as_of_date(upload_env,
     result = run_pipeline(**kwargs)
     with open(result.metadata_path) as f:
         rate = yaml.safe_load(f)["risk_free_rate"]
-    history = fake_risk_free_history(None)
+    history = fake_risk_free_history(None, pd.Timestamp("2026-06-01"))
     previous_session = wide_prices().index[-2].normalize()
     assert rate["risk_free_rate_date"] == str(previous_session)
     assert rate["risk_free_rate"] == pytest.approx(history.loc[previous_session, "DTB3"])
@@ -460,7 +467,7 @@ def test_optimization_failure_uploads_nothing_but_keeps_forecast_cache(
 ):
     _, _, uploader, kwargs = deps
 
-    def failing_rf(dm):
+    def failing_rf(dm, first_date):
         raise RuntimeError("risk-free rate unavailable")
 
     kwargs["risk_free_history_getter"] = failing_rf
@@ -503,12 +510,12 @@ def test_backtest_uses_its_windows_and_the_settings_of_the_config(upload_env, de
     wide = wide_prices()
     assert meta["schedule"]["training_window_returns"] == 252
     assert meta["schedule"]["rebalance_interval_sessions"] == 5
-    assert meta["schedule"]["rebalance_count"] == EVALUATION_DAYS // 5
+    assert meta["schedule"]["rebalance_count"] == BACKTEST_DAYS // 5
     assert meta["constraints"]["weight_cap_multiple"] == PO_CONFIG.weight_cap_multiple
-    assert meta["evaluation_window"]["trading_days"] == EVALUATION_DAYS
+    assert meta["evaluation_window"]["trading_days"] == BACKTEST_DAYS
     assert meta["evaluation_window"]["end_date"] == result.as_of
     assert meta["evaluation_window"]["initial_wealth_date"] == wide.index[
-        -(EVALUATION_DAYS + 1)
+        -(BACKTEST_DAYS + 1)
     ].strftime("%Y-%m-%d")
     first = meta["rebalances"][0]
     assert first["training_window"]["first_close_date"] == first_backtest_session()
@@ -516,16 +523,59 @@ def test_backtest_uses_its_windows_and_the_settings_of_the_config(upload_env, de
     assert meta["tickers"] == SYNTHETIC_TICKERS
 
 
-def test_backtest_scores_the_same_days_as_the_forecasts(upload_env, deps):
+def test_backtest_scores_its_own_days_ending_with_the_forecasts(upload_env, deps):
     _, _, _, kwargs = deps
     result = run_pipeline(**kwargs)
     backtest = load_backtest_metadata(result)["evaluation_window"]
     forecasts = load_forecasts_metadata(result)["evaluation_window"]
-    assert backtest["trading_days"] == forecasts["target_trading_days"]
-    assert backtest["start_date"] == forecasts["start_date"]
-    assert backtest["end_date"] == forecasts["end_date"]
+    wide = wide_prices()
+    assert backtest["trading_days"] == BACKTEST_DAYS
+    assert forecasts["target_trading_days"] == EVALUATION_DAYS
+    assert backtest["trading_days"] != forecasts["target_trading_days"]
+    # Both end on the as-of date; each starts its own number of days back.
+    assert backtest["end_date"] == forecasts["end_date"] == result.as_of
+    assert backtest["start_date"] == wide.index[-BACKTEST_DAYS].strftime("%Y-%m-%d")
+    assert forecasts["start_date"] == wide.index[-EVALUATION_DAYS].strftime("%Y-%m-%d")
     daily = pd.read_csv(result.backtest_daily_path, index_col="date")
-    assert len(daily) == EVALUATION_DAYS + 1
+    assert len(daily) == BACKTEST_DAYS + 1
+
+
+def test_risk_free_history_is_requested_from_the_first_rebalance(upload_env, deps):
+    # The earliest optimization is the backtest's first rebalance, at the
+    # close where wealth is $1.00; the history must reach back before it.
+    _, _, _, kwargs = deps
+    requested = []
+
+    def recording_rf(dm, first_date):
+        requested.append(first_date)
+        return fake_risk_free_history(dm, first_date)
+
+    kwargs["risk_free_history_getter"] = recording_rf
+    result = run_pipeline(**kwargs)
+    meta = load_backtest_metadata(result)
+    assert len(requested) == 1
+    first_rebalance = meta["rebalances"][0]["date"]
+    assert requested[0].strftime("%Y-%m-%d") == first_rebalance
+    assert first_rebalance == meta["evaluation_window"]["initial_wealth_date"]
+
+
+def test_backtest_days_flow_from_the_config(upload_env, deps):
+    # A shorter backtest changes only the backtest, and the ARIMA window
+    # becomes the largest need.
+    _, _, _, kwargs = deps
+    bt_config = PortfolioBacktestConfig(
+        training_window_returns=252,
+        evaluation_window_length=10,
+        rebalance_interval_sessions=5,
+    )
+    kwargs.update(bt_config=bt_config)
+    result = run_pipeline(**kwargs)
+    assert required_sessions(TS_CONFIG, bt_config) == ARIMA_WINDOW_SESSIONS
+    meta = load_backtest_metadata(result)
+    assert meta["evaluation_window"]["trading_days"] == 10
+    assert meta["schedule"]["rebalance_count"] == 2
+    forecasts = load_forecasts_metadata(result)["evaluation_window"]
+    assert forecasts["target_trading_days"] == EVALUATION_DAYS
 
 
 def test_backtest_failure_uploads_nothing(upload_env, deps, monkeypatch):

@@ -22,6 +22,7 @@ from aliciadata_finance_backend.optimization.portfolio import (
     OptimizationError,
     efficient_frontier,
     get_risk_free_rate_history,
+    has_rate_before,
     latest_risk_free_rate,
     max_return_weights,
     max_sharpe_weights,
@@ -300,6 +301,9 @@ class FakeDateManager:
 
 
 HISTORY_CACHE = os.path.join("input", "Risk Free Rate History 2026-10-14.csv")
+# The earliest optimization date in these tests. The default fake FRED data
+# has a rate on 2026-10-09, before it.
+FIRST_DATE = pd.Timestamp("2026-10-12")
 
 
 @pytest.fixture
@@ -317,6 +321,7 @@ def fake_fred(monkeypatch):
     def fake_data_reader(name, source, start, end):
         assert (name, source) == ("DTB3", "fred")
         calls["count"] += 1
+        calls["start"] = start
         return calls["df"]
 
     monkeypatch.setattr(portfolio.web, "DataReader", fake_data_reader)
@@ -324,7 +329,7 @@ def fake_fred(monkeypatch):
 
 
 def test_get_risk_free_rate_history_downloads_and_writes_cache(in_tmp_input, fake_fred):
-    data = get_risk_free_rate_history(FakeDateManager())
+    data = get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
     assert fake_fred["count"] == 1
     assert data["DTB3"].iloc[0] == pytest.approx(4.07)
     assert os.path.exists(HISTORY_CACHE)
@@ -333,8 +338,8 @@ def test_get_risk_free_rate_history_downloads_and_writes_cache(in_tmp_input, fak
 def test_get_risk_free_rate_history_cache_reads_back_without_download(
     in_tmp_input, fake_fred
 ):
-    downloaded = get_risk_free_rate_history(FakeDateManager())
-    cached = get_risk_free_rate_history(FakeDateManager())
+    downloaded = get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
+    cached = get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
     assert fake_fred["count"] == 1
     assert list(cached.index) == list(downloaded.index)
     assert isinstance(cached.index, pd.DatetimeIndex)
@@ -344,7 +349,7 @@ def test_get_risk_free_rate_history_cache_reads_back_without_download(
 
 def test_get_risk_free_rate_history_replaces_a_cache_without_rates(in_tmp_input, fake_fred):
     fred_frame(["2026-10-12"], [np.nan]).to_csv(HISTORY_CACHE)
-    data = get_risk_free_rate_history(FakeDateManager())
+    data = get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
     assert fake_fred["count"] == 1
     assert data["DTB3"].iloc[0] == pytest.approx(4.07)
 
@@ -353,7 +358,7 @@ def test_get_risk_free_rate_history_creates_missing_input_folder(
     tmp_path, monkeypatch, fake_fred
 ):
     monkeypatch.chdir(tmp_path)
-    get_risk_free_rate_history(FakeDateManager())
+    get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
     assert os.path.exists(HISTORY_CACHE)
 
 
@@ -362,5 +367,41 @@ def test_get_risk_free_rate_history_with_no_valid_rate_raises_and_writes_nothing
 ):
     fake_fred["df"] = fred_frame(["2026-10-12"], [np.nan])
     with pytest.raises(ValueError):
-        get_risk_free_rate_history(FakeDateManager())
+        get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
     assert not os.path.exists(HISTORY_CACHE)
+
+
+def test_get_risk_free_rate_history_downloads_from_before_the_first_date(
+    in_tmp_input, fake_fred
+):
+    get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
+    margin = pd.Timedelta(days=portfolio.RISK_FREE_HISTORY_MARGIN_DAYS)
+    assert fake_fred["start"] == FIRST_DATE - margin
+
+
+def test_get_risk_free_rate_history_replaces_a_cache_that_starts_too_late(
+    in_tmp_input, fake_fred
+):
+    # A cache from an earlier run that needed less history: its rates all
+    # date from on or after the first date, so none can be used for it.
+    fred_frame(["2026-10-12", "2026-10-13"], [4.05, 4.06]).to_csv(HISTORY_CACHE)
+    data = get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
+    assert fake_fred["count"] == 1
+    assert risk_free_rate_before(data, FIRST_DATE)["risk_free_rate"] == pytest.approx(
+        4.07
+    )
+
+
+def test_get_risk_free_rate_history_without_a_rate_before_the_first_date_raises(
+    in_tmp_input, fake_fred
+):
+    fake_fred["df"] = fred_frame(["2026-10-12", "2026-10-13"], [4.05, 4.06])
+    with pytest.raises(ValueError, match="before 2026-10-12"):
+        get_risk_free_rate_history(FakeDateManager(), FIRST_DATE)
+    assert not os.path.exists(HISTORY_CACHE)
+
+
+def test_has_rate_before_excludes_the_date_itself_and_missing_values():
+    df = fred_frame(["2026-10-09", "2026-10-12"], [np.nan, 4.07])
+    assert not has_rate_before(df, pd.Timestamp("2026-10-12"))
+    assert has_rate_before(df, pd.Timestamp("2026-10-13 16:00"))
