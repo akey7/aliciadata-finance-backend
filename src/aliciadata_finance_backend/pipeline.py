@@ -5,9 +5,10 @@ backtest, then upload all six frontend files.
 
 The time series settings (training window, scored days), the portfolio
 optimization settings (weight cap, frontier points, random portfolios, seed),
-and the backtest settings (training window, rebalance interval) come from the
-configuration file, passed in as a TimeSeriesConfig, a
+and the backtest settings (training window, scored days, rebalance interval)
+come from the configuration file, passed in as a TimeSeriesConfig, a
 PortfolioOptimizationConfig, and a PortfolioBacktestConfig (see config.py).
+The forecasts and the backtest each have their own number of scored days.
 
 Order of operations:
 1. Price data: one download of price_download_sessions() trading days,
@@ -22,8 +23,9 @@ Order of operations:
    before the files are written, and the written .h5 and .yml files are read
    back and checked against each other before any upload.
 4. Backtest: the max Sharpe ratio portfolio against equal weights over the
-   same scored days as the forecasts, on the last
-   PortfolioBacktestConfig.sessions_needed() sessions, which must be complete
+   last PortfolioBacktestConfig.evaluation_window_length scored days, which
+   are set independently of the forecasts' scored days, on the last
+   PortfolioBacktestConfig.sessions_needed sessions, which must be complete
    consecutive NYSE sessions. Written to the same folder as the optimization
    and checked the same way. Its metadata also records step 3's result as
    final_optimization, and that record is checked against step 3's two files.
@@ -112,13 +114,10 @@ def required_sessions(
     """
     Trading sessions every run needs: enough for the walk-forward ARIMA
     (TimeSeriesConfig.arima_window_sessions) and the backtest
-    (PortfolioBacktestConfig.sessions_needed()), whichever is larger. The
+    (PortfolioBacktestConfig.sessions_needed), whichever is larger. The
     optimization's window is the last part of the backtest's. Pure function.
     """
-    return max(
-        ts_config.arima_window_sessions,
-        bt_config.sessions_needed(ts_config.evaluation_window_length),
-    )
+    return max(ts_config.arima_window_sessions, bt_config.sessions_needed)
 
 
 def price_download_sessions(
@@ -199,7 +198,7 @@ def run_pipeline(
     trainer: ForecastTrainer | None = None,
     uploader: Uploader | None = None,
     risk_free_history_getter: Callable[
-        [DateManager], pd.DataFrame
+        [DateManager, pd.Timestamp], pd.DataFrame
     ] = get_risk_free_rate_history,
     sessions_getter: Callable[
         [pd.Timestamp, int], pd.DatetimeIndex
@@ -242,7 +241,7 @@ def run_pipeline(
 
     ts_config : TimeSeriesConfig
         Time series settings from the configuration file: the training
-        window length and the number of scored backtest days. Required; it
+        window length and the number of scored forecast days. Required; it
         has no default, so the configuration file is the one source of
         truth.
 
@@ -253,9 +252,9 @@ def run_pipeline(
 
     bt_config : PortfolioBacktestConfig
         Portfolio backtest settings from the configuration file: the
-        training window, which the optimization uses too, and the rebalance
-        interval. Required, like ts_config. The backtest scores ts_config's
-        evaluation days and uses po_config's weight cap.
+        training window, which the optimization uses too, the number of
+        scored backtest days, and the rebalance interval. Required, like
+        ts_config. The backtest uses po_config's weight cap.
 
     tdm, trainer, uploader, risk_free_history_getter, sessions_getter, dm : optional
         Dependencies, defaulting to the real implementations. Tests pass
@@ -277,8 +276,7 @@ def run_pipeline(
     n_required = required_sessions(ts_config, bt_config)
     n_download = price_download_sessions(ts_config, bt_config)
     arima_sessions = ts_config.arima_window_sessions
-    evaluation_days = ts_config.evaluation_window_length
-    backtest_sessions = bt_config.sessions_needed(evaluation_days)
+    backtest_sessions = bt_config.sessions_needed
     tdm = tdm if tdm is not None else TickerDownloadManager(PRICE_DOWNLOAD_FOLDER)
     dm = dm if dm is not None else DateManager()
     long_df, start_date, end_date = tdm.get_latest_tickers(
@@ -338,15 +336,19 @@ def run_pipeline(
             tdm.tickers,
             window_start,
             window_end,
-            eval_days=evaluation_days,
+            eval_days=ts_config.evaluation_window_length,
             training_window_returns=ts_config.training_window_returns,
         ),
         forecasts_metadata_path,
     )
     print(f"Saved {forecasts_metadata_path}")
 
-    # 3. Portfolio optimization
-    tb3m_df = risk_free_history_getter(dm)
+    # 3. Portfolio optimization. The risk-free history must reach back before
+    # the backtest's first rebalance, the earliest optimization date, which
+    # is the close that ends the first training window.
+    backtest_prices = last_n_sessions(wide_df, backtest_sessions)
+    first_rebalance_date = backtest_prices.index[bt_config.training_window_returns]
+    tb3m_df = risk_free_history_getter(dm, first_rebalance_date)
     risk_free_rate_data = risk_free_rate_before(tb3m_df, wide_df.index[-1])
     print(risk_free_rate_data)
     optimization_prices = last_n_sessions(wide_df, bt_config.training_window_closes)
@@ -376,12 +378,11 @@ def run_pipeline(
     verify_optimization_files(plot_data_path, metadata_path)
 
     # 4. Portfolio backtest
-    backtest_prices = last_n_sessions(wide_df, backtest_sessions)
     backtest_result = run_portfolio_backtest(
         backtest_prices,
         tb3m_df,
         training_window_returns=bt_config.training_window_returns,
-        evaluation_days=evaluation_days,
+        evaluation_days=bt_config.evaluation_window_length,
         rebalance_interval=bt_config.rebalance_interval_sessions,
         weight_cap_multiple=po_config.weight_cap_multiple,
         expected_sessions=sessions_getter(backtest_prices.index[-1], backtest_sessions),
