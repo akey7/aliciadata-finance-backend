@@ -19,12 +19,17 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 import pandas_datareader as web
-from dateutil.relativedelta import relativedelta
 from aliciadata_finance_backend.optimization.problem import (
     TRADING_DAYS_PER_YEAR,
     PortfolioProblem,
 )
 from aliciadata_finance_backend.storage.layout import ensure_parent_dir
+
+# Calendar days of DTB3 history downloaded before the earliest optimization
+# date. FRED leaves DTB3 empty on bond-market holidays, so the last rate
+# before a date can be several days older than it; two weeks always contains
+# one.
+RISK_FREE_HISTORY_MARGIN_DAYS = 14
 
 
 class OptimizationError(RuntimeError):
@@ -258,13 +263,30 @@ def risk_free_rate_before(tb3m_df, cutoff) -> dict:
     return latest_risk_free_rate(tb3m_df[tb3m_df.index.normalize() < cutoff.normalize()])
 
 
-def get_risk_free_rate_history(dm):
+def has_rate_before(tb3m_df: pd.DataFrame, first_date: pd.Timestamp) -> bool:
     """
-    Finds the 3-month U.S. treasury bill rates (FRED DTB3) of the past year,
-    from which every optimization takes the rate available at its date (see
-    risk_free_rate_before()). Caches them in input/Risk Free Rate History
-    YYYY-MM-DD.csv (today's date) so that repeated calls on the same day do
-    not download again. A cached file with no valid rate is ignored and
+    Whether tb3m_df has a non-missing DTB3 rate dated strictly before
+    first_date, so that risk_free_rate_before(tb3m_df, first_date) succeeds.
+    Pure function.
+    """
+    valid = tb3m_df.dropna(subset=["DTB3"])
+    return bool((valid.index.normalize() < first_date.normalize()).any())
+
+
+def get_risk_free_rate_history(dm, first_date: pd.Timestamp) -> pd.DataFrame:
+    """
+    Finds the 3-month U.S. treasury bill rates (FRED DTB3) from
+    RISK_FREE_HISTORY_MARGIN_DAYS calendar days before first_date until
+    today, from which every optimization takes the rate available at its
+    date (see risk_free_rate_before()). first_date is the earliest
+    optimization date that needs a rate, normally the backtest's first
+    rebalance; the margin makes sure a rate dated before it exists even when
+    it follows bond-market holidays and a weekend.
+
+    Caches the rates in input/Risk Free Rate History YYYY-MM-DD.csv (today's
+    date) so that repeated calls on the same day do not download again. A
+    cached file with no valid rate before first_date (for example, one
+    written by an earlier run that needed less history) is ignored and
     replaced. The input/ folder is created when the cache is written, if it
     does not exist yet.
 
@@ -272,6 +294,9 @@ def get_risk_free_rate_history(dm):
     ----------
     dm : DateManager
         Supplies today's date for the cache file name.
+
+    first_date : pd.Timestamp
+        The earliest optimization date. Any time of day is ignored.
 
     Returns
     -------
@@ -282,20 +307,28 @@ def get_risk_free_rate_history(dm):
     Raises
     ------
     ValueError
-        If FRED returns no valid DTB3 rate for the past year.
+        If FRED returns no valid DTB3 rate dated before first_date. Nothing
+        is cached then.
     """
     today_date = dm.get_today_date()
     history_filename = os.path.join("input", f"Risk Free Rate History {today_date}.csv")
     if os.path.exists(history_filename):
         print("Reading risk-free rate history cache...")
         tb3m_df = pd.read_csv(history_filename, index_col=0, parse_dates=True)
-        if tb3m_df["DTB3"].notna().any():
+        if has_rate_before(tb3m_df, first_date):
             return tb3m_df
-        print("Cached risk-free rate history is invalid; downloading again...")
+        print(
+            "Cached risk-free rate history has no rate before "
+            f"{first_date.date()}; downloading again..."
+        )
     end_date = datetime.datetime.now()
-    start_date = end_date - relativedelta(years=1)
+    margin = pd.Timedelta(days=RISK_FREE_HISTORY_MARGIN_DAYS)
+    start_date = first_date.normalize() - margin
     tb3m_df = web.DataReader("DTB3", "fred", start_date, end_date)
-    if not tb3m_df["DTB3"].notna().any():
-        raise ValueError("No non-missing DTB3 (3-month T-bill) rate in the data.")
+    if not has_rate_before(tb3m_df, first_date):
+        raise ValueError(
+            "No non-missing DTB3 (3-month T-bill) rate dated before "
+            f"{first_date.date()} in the data."
+        )
     tb3m_df.to_csv(ensure_parent_dir(history_filename))
     return tb3m_df

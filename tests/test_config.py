@@ -15,6 +15,7 @@ import pytest
 
 from aliciadata_finance_backend.config import (
     DEFAULT_CONFIG_PATH,
+    MIN_BACKTEST_EVALUATION_DAYS,
     MIN_BACKTEST_TRAINING_RETURNS,
     MIN_TRAINING_WINDOW_LENGTH,
     ConfigError,
@@ -45,9 +46,14 @@ PORTFOLIO_YAML = (
     "  near_frontier_tolerance: 1.0\n"
     "portfolio_backtest:\n"
     "  training_window_returns: 252\n"
+    "  evaluation_window_length: 250\n"
     "  rebalance_interval_sessions: 5\n"
 )
-BACKTEST = {"training_window_returns": 252, "rebalance_interval_sessions": 5}
+BACKTEST = {
+    "training_window_returns": 252,
+    "evaluation_window_length": 250,
+    "rebalance_interval_sessions": 5,
+}
 
 
 def raw(training=252, evaluation=20, portfolio=None, backtest=None, **extra) -> dict:
@@ -83,7 +89,9 @@ def test_parse_config_reads_every_value():
             near_frontier_tolerance=1.0,
         ),
         portfolio_backtest=PortfolioBacktestConfig(
-            training_window_returns=252, rebalance_interval_sessions=5
+            training_window_returns=252,
+            evaluation_window_length=250,
+            rebalance_interval_sessions=5,
         ),
     )
 
@@ -297,18 +305,53 @@ def test_rebalance_interval_must_be_positive():
         parse_config(raw(backtest={"rebalance_interval_sessions": 0}))
 
 
-def test_rebalance_interval_must_divide_the_scored_days():
-    parse_config(raw(evaluation=60, backtest={"rebalance_interval_sessions": 20}))
-    with pytest.raises(ConfigError, match="multiple of.*rebalance_interval_sessions"):
-        parse_config(raw(evaluation=60, backtest={"rebalance_interval_sessions": 7}))
+def test_rebalance_interval_must_divide_the_backtest_days():
+    days = {"evaluation_window_length": 60}
+    parse_config(raw(backtest={**days, "rebalance_interval_sessions": 20}))
+    with pytest.raises(
+        ConfigError,
+        match="portfolio_backtest.evaluation_window_length.*multiple of.*"
+        "rebalance_interval_sessions",
+    ):
+        parse_config(raw(backtest={**days, "rebalance_interval_sessions": 7}))
+
+
+def test_backtest_days_have_a_minimum():
+    parse_config(
+        raw(
+            backtest={
+                "evaluation_window_length": MIN_BACKTEST_EVALUATION_DAYS,
+                "rebalance_interval_sessions": 1,
+            }
+        )
+    )
+    with pytest.raises(ConfigError, match="portfolio_backtest.evaluation_window_length"):
+        parse_config(
+            raw(
+                backtest={
+                    "evaluation_window_length": MIN_BACKTEST_EVALUATION_DAYS - 1,
+                    "rebalance_interval_sessions": 1,
+                }
+            )
+        )
+
+
+def test_forecast_and_backtest_days_are_independent():
+    # 7 forecast days are not a multiple of the 5-session rebalance interval,
+    # which only constrains the backtest's own days.
+    config = parse_config(raw(evaluation=7))
+    assert config.time_series_models.evaluation_window_length == 7
+    assert config.portfolio_backtest.evaluation_window_length == 250
 
 
 def test_backtest_sessions_needed():
     config = PortfolioBacktestConfig(
-        training_window_returns=252, rebalance_interval_sessions=5
+        training_window_returns=252,
+        evaluation_window_length=250,
+        rebalance_interval_sessions=5,
     )
     assert config.training_window_closes == 253
-    assert config.sessions_needed(60) == 313  # 253 closes + 60 scored days.
+    assert config.sessions_needed == 503  # 253 closes + 250 scored days.
 
 
 # load_config

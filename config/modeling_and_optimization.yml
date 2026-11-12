@@ -16,8 +16,9 @@ time_series_models:
   # on the session before the forecast date. A window of N closes holds N - 1
   # daily log returns.
   training_window_length: 252
-  # Most recent trading days with an actual close that are backtested and scored
-  # in all_forecasts_metadata.yml: one forecast each, plus the live forecast.
+  # Most recent trading days with an actual close whose forecasts are scored in
+  # all_forecasts_metadata.yml: one forecast each, plus the live forecast. The
+  # portfolio backtest has its own length (portfolio_backtest below).
   evaluation_window_length: 60
 portfolio_optimization:
   # Per-ticker weight cap, as a multiple of the equal weight: each weight is at
@@ -42,9 +43,9 @@ portfolio_optimization:
   # optimization_metadata.yml. A number greater than 0.
   near_frontier_tolerance: 1.0
 # Walk-forward backtest of the max Sharpe ratio portfolio against equal weights.
-# It scores the last time_series_models.evaluation_window_length trading days,
-# like the forecasts, and uses portfolio_optimization.weight_cap_multiple, like
-# the live optimization. It is recomputed on every run, and each run records
+# It scores its own number of days, independent of the forecasts', and uses
+# portfolio_optimization.weight_cap_multiple, like the live optimization. It is
+# recomputed on every run (no --retrain-arima needed), and each run records
 # these values in portfolio_backtest_metadata.yml.
 portfolio_backtest:
   # Daily simple returns in each optimization's training window, ending on the
@@ -52,7 +53,12 @@ portfolio_backtest:
   # and the backtest's final_optimization agree. The window holds one more
   # close than this. At least 30.
   training_window_returns: 252
+  # Most recent trading days scored by the backtest. The wealth series in
+  # portfolio_backtest_daily.csv has one more value than this. Raising it
+  # lengthens the price download (training_window_returns + 1 + this many
+  # sessions). At least 2, and a multiple of rebalance_interval_sessions.
+  evaluation_window_length: 250
   # Trading sessions between rebalances, which is also the length of each
-  # holding period. At least 1, and it must divide
-  # time_series_models.evaluation_window_length exactly.
+  # holding period. At least 1, and it must divide evaluation_window_length
+  # exactly.
   rebalance_interval_sessions: 5
