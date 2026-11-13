@@ -16,6 +16,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
 
  scripts/run_optimization_and_time_series.py      entry point
    ├─ config.py ◄── config/modeling_and_optimization.yml
+   ├─ memory_usage.py                             peak memory, printed after the run
    └─ pipeline.py                                 runs the steps below
         │
  [Massive.com API] ──► 1. PRICES
@@ -105,6 +106,7 @@ aliciadata-finance-backend/
 │   └── ticker_download_to_csv.py
 ├── src/aliciadata_finance_backend/ # IMPORT these: reusable library code, no entry points
 │   ├── config.py                 # Loads and validates the model settings file
+│   ├── memory_usage.py           # Peak memory of a run, printed by the entry script
 │   ├── pipeline.py               # One full run: prices → ARIMA → metrics → optimization → backtest → uploads
 │   ├── data/                     # Market data download, caching, price reshaping, and date logic
 │   ├── optimization/             # Portfolio optimization math and its backtest
@@ -166,6 +168,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/arima_models.py`               | Trains ARIMA models on price data.                                                                                                                      | No                                   |
 | `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA training over rolling windows; `load_or_train_forecasts` caches the result.                                      | No                                   |
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
+| `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. | No |
 | `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
 | `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
