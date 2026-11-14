@@ -26,14 +26,26 @@ REGION_ONLY_ENDPOINT = "https://nyc3.digitaloceanspaces.com"
 
 
 class FakeClient:
-    def __init__(self, error: Exception | None = None):
+    def __init__(self, error: Exception | None = None, keys: set[str] = frozenset()):
         self.error = error
+        self.keys = keys
         self.calls: list[tuple[str, str, str]] = []
+        self.head_calls: list[tuple[str, str]] = []
 
     def upload_file(self, local_filename, bucket_name, remote_filename):
         self.calls.append((local_filename, bucket_name, remote_filename))
         if self.error is not None:
             raise self.error
+
+    def head_object(self, Bucket, Key):
+        self.head_calls.append((Bucket, Key))
+        if self.error is not None:
+            raise self.error
+        if Key not in self.keys:
+            raise ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject"
+            )
+        return {}
 
 
 @pytest.fixture
@@ -151,3 +163,37 @@ def test_space_specific_endpoints_are_rejected(env, monkeypatch, endpoint):
 )
 def test_region_only_or_default_endpoints_are_accepted(endpoint):
     validate_endpoint(endpoint, SPACE)  # Does not raise.
+
+
+# Checking whether an object exists
+
+
+def test_object_exists_for_a_present_key(fake_client):
+    fake_client["client"] = FakeClient(keys={"po/2026-11-13/optimization_metadata.yml"})
+    assert S3Uploader().object_exists("po/2026-11-13/optimization_metadata.yml")
+    assert fake_client["client"].head_calls == [
+        (SPACE, "po/2026-11-13/optimization_metadata.yml")
+    ]
+
+
+def test_object_does_not_exist_for_a_missing_key(fake_client):
+    assert not S3Uploader().object_exists("po/2026-11-13/optimization_metadata.yml")
+
+
+@pytest.mark.parametrize("code", ["NoSuchKey", "NotFound"])
+def test_other_not_found_codes_mean_missing(fake_client, code):
+    fake_client["client"] = FakeClient(
+        error=ClientError({"Error": {"Code": code, "Message": "x"}}, "HeadObject")
+    )
+    assert not S3Uploader().object_exists("po/2026-11-13/optimization_metadata.yml")
+
+
+def test_other_errors_are_raised_not_taken_as_missing(fake_client):
+    # A failed check (here, no permission) must not pass for "missing".
+    fake_client["client"] = FakeClient(
+        error=ClientError(
+            {"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject"
+        )
+    )
+    with pytest.raises(ClientError):
+        S3Uploader().object_exists("po/2026-11-13/optimization_metadata.yml")

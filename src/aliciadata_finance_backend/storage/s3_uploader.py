@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 import boto3
 from botocore.client import Config
+from botocore.exceptions import ClientError
 
 # Name of the environment variable holding the name of the one frontend
 # Space (S3 bucket). The two top-level folders inside it are named by
@@ -18,6 +19,10 @@ ENDPOINT_ENV = "AWS_ENDPOINT_URL_S3"
 REGION_ENV = "AWS_DEFAULT_REGION"
 ACCESS_KEY_ID_ENV = "AWS_ACCESS_KEY_ID"
 SECRET_ACCESS_KEY_ENV = "AWS_SECRET_ACCESS_KEY"
+
+# Error codes with which S3 (and DigitalOcean Spaces) answer HeadObject for a
+# key that does not exist.
+NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
 # Every variable S3Uploader() needs, in the order they are reported missing.
 REQUIRED_ENVS = (
@@ -127,8 +132,47 @@ class S3Uploader:
             If S3 rejects the upload (e.g. a wrong Space name or
             insufficient permissions).
         """
+        self._client().upload_file(
+            local_filename,
+            self.bucket_name,
+            object_key,
+        )
+        print(f"Upload of {object_key} successful!")
+
+    def object_exists(self, object_key: str) -> bool:
+        """
+        Whether an object with this key exists in the frontend Space, from a
+        HeadObject request (which reads no content).
+
+        Parameters
+        ----------
+        object_key : str
+            Full object key in the Space, as for upload_file().
+
+        Returns
+        -------
+        bool
+            True if the object exists, False if S3 answers that it does not.
+
+        Raises
+        ------
+        botocore.exceptions.ClientError
+            For any other error, such as insufficient permissions, so a
+            failed check is never taken to mean "missing" or "present".
+        """
+        try:
+            self._client().head_object(Bucket=self.bucket_name, Key=object_key)
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code in NOT_FOUND_CODES:
+                return False
+            raise
+        return True
+
+    def _client(self):
+        """An S3 client for the Space, with this instance's settings."""
         session = boto3.session.Session()
-        client = session.client(
+        return session.client(
             "s3",
             region_name=self.region_name,
             endpoint_url=self.endpoint_url,
@@ -136,9 +180,3 @@ class S3Uploader:
             aws_secret_access_key=self.aws_secret_access_key,
             config=Config(signature_version="s3v4"),
         )
-        client.upload_file(
-            local_filename,
-            self.bucket_name,
-            object_key,
-        )
-        print(f"Upload of {object_key} successful!")

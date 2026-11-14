@@ -16,6 +16,8 @@ from aliciadata_finance_backend.memory_usage import (
     format_peak_memory,
     maxrss_bytes,
     measure_peak_memory,
+    read_peak_memory_json,
+    write_peak_memory_json,
 )
 
 
@@ -85,3 +87,10 @@ def test_measure_reads_self_and_children_and_converts(monkeypatch):
         largest_worker_bytes=200 * BYTES_PER_MIB,
         workers=3,
     )
+
+
+def test_peak_memory_survives_a_json_round_trip(tmp_path):
+    peak = PeakMemory(main_bytes=123, largest_worker_bytes=45, workers=2)
+    path = str(tmp_path / "peak.json")
+    write_peak_memory_json(peak, path)
+    assert read_peak_memory_json(path) == peak

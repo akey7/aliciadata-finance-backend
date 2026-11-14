@@ -63,17 +63,32 @@ class DateManager:
     Stock Exchange (NYSE) trading calendar.
     """
 
-    def __init__(self):
+    def __init__(self, today: str | None = None):
         """
         Instantiates the class and sets up the calendar of business days
         to use: weekdays excluding NYSE holidays (see nyse_holidays()).
+
+        Parameters
+        ----------
+        today : str, optional
+            A fixed "today" as YYYY-MM-DD, returned by get_today_date()
+            instead of the current date. The daily caches in input/ are named
+            by this date, so a backfill pins it to the day it downloaded on
+            and every run in it reads those files, even after midnight.
+            Defaults to None, the current date.
         """
         self.cbd = CustomBusinessDay(holidays=nyse_holidays())
+        if today is not None:
+            datetime.strptime(today, "%Y-%m-%d")  # Rejects anything else.
+        self.today = today
 
     def get_today_date(self):
         """
-        Return today's date as a YYYY-MM-DD string.
+        Return today's date as a YYYY-MM-DD string: the fixed date given to
+        the constructor, if any, otherwise the current date.
         """
+        if self.today is not None:
+            return self.today
         today = datetime.now()
         return today.strftime("%Y-%m-%d")
 

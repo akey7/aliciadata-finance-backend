@@ -6,6 +6,7 @@ S3 are replaced by in-memory doubles; files are written only under pytest's tmp_
 here touches the network, a bucket, or the real input/ and output/ folders.
 """
 
+import datetime
 import os
 
 import h5py
@@ -26,13 +27,18 @@ from aliciadata_finance_backend.data.prices import pivot_close_wide
 from aliciadata_finance_backend.pipeline import (
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
+    first_rebalance_date,
     price_download_sessions,
     required_sessions,
     run_pipeline,
+    utc_timestamp,
+    with_provenance,
 )
+from aliciadata_finance_backend.storage.layout import CONTRACT_VERSION
 from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
 SPACE = "test-space"
+COMPUTED_AT = "2026-11-14T12:00:00Z"
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
@@ -165,6 +171,8 @@ def deps(tmp_path):
         output_root=str(tmp_path / "output"),
         po_config=PO_CONFIG,
         bt_config=BT_CONFIG,
+        # Fixed, so files from two runs can be compared byte for byte.
+        computed_at=COMPUTED_AT,
     )
     return tdm, trainer, uploader, kwargs
 
@@ -904,3 +912,65 @@ def test_as_of_date_with_too_little_history_fails(deps):
     early = wide_prices().index[REQUIRED_SESSIONS - 2].normalize()
     with pytest.raises(ValueError, match="fewer than"):
         run_pipeline(upload=False, **kwargs, as_of_date=early)
+
+
+# Provenance in the metadata files (contract v48)
+
+
+def test_every_metadata_file_records_when_and_by_which_contract(deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(upload=False, **kwargs)
+    for path in (
+        result.forecasts_metadata_path,
+        result.metadata_path,
+        result.backtest_metadata_path,
+    ):
+        with open(path) as f:
+            metadata = yaml.safe_load(f)
+        assert metadata["computed_at"] == COMPUTED_AT, path
+        assert metadata["contract_version"] == CONTRACT_VERSION, path
+
+
+def test_provenance_defaults_to_the_time_of_the_run(deps):
+    _, _, _, kwargs = deps
+    del kwargs["computed_at"]
+    before = utc_timestamp()
+    result = run_pipeline(upload=False, **kwargs)
+    after = utc_timestamp()
+    with open(result.metadata_path) as f:
+        computed_at = yaml.safe_load(f)["computed_at"]
+    assert before <= computed_at <= after  # ISO strings sort by time.
+
+
+def test_optimization_metadata_keeps_its_comment_with_provenance(deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(upload=False, **kwargs)
+    with open(result.metadata_path) as f:
+        text = f.read()
+    comment = "# optimum_portfolio is the maximum Sharpe ratio (tangency) portfolio."
+    assert comment in text
+
+
+def test_with_provenance_adds_both_keys_without_changing_the_input():
+    metadata = {"tickers": ["XBI"]}
+    assert with_provenance(metadata, COMPUTED_AT) == {
+        "tickers": ["XBI"],
+        "computed_at": COMPUTED_AT,
+        "contract_version": CONTRACT_VERSION,
+    }
+    assert metadata == {"tickers": ["XBI"]}
+
+
+def test_utc_timestamp_format_and_time_zone():
+    utc = datetime.datetime(2026, 11, 14, 9, 5, 3, tzinfo=datetime.timezone.utc)
+    assert utc_timestamp(utc) == "2026-11-14T09:05:03Z"
+    eastern = datetime.timezone(datetime.timedelta(hours=-5))
+    assert utc_timestamp(utc.astimezone(eastern)) == "2026-11-14T09:05:03Z"
+    naive = datetime.datetime(2026, 11, 14, 9, 5, 3)  # Taken to be UTC.
+    assert utc_timestamp(naive) == "2026-11-14T09:05:03Z"
+
+
+def test_first_rebalance_date_is_the_close_ending_the_first_training_window():
+    wide = wide_prices()
+    expected = wide.index[-BACKTEST_SESSIONS + BT_CONFIG.training_window_returns]
+    assert first_rebalance_date(wide, BT_CONFIG) == expected

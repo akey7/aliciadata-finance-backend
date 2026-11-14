@@ -17,9 +17,15 @@ counters cannot give. The main process and the workers run at the same time,
 so main + workers × largest worker is reported as an upper bound for it.
 
 ru_maxrss is in bytes on macOS and in kibibytes on Linux; maxrss_bytes()
-converts both to bytes. Everything here is pure except measure_peak_memory().
+converts both to bytes. Everything here is pure except measure_peak_memory()
+and the two JSON functions, which a backfill uses to pass each day's peaks
+from that day's process to the process that runs the backfill. The counters
+are high-water marks for a whole process and cannot be reset, which is why
+a backfill runs each day in its own process.
 """
 
+import dataclasses
+import json
 import resource
 import sys
 from dataclasses import dataclass
@@ -140,3 +146,37 @@ def format_peak_memory(peak: PeakMemory) -> str:
         f"largest worker): {_mib(peak.upper_bound_bytes)}",
     ]
     return "\n".join(lines)
+
+
+def write_peak_memory_json(peak: PeakMemory, path: str) -> None:
+    """
+    Write the peaks to a JSON file, overwriting it. Its folder must exist.
+
+    Parameters
+    ----------
+    peak : PeakMemory
+        The peaks to write.
+
+    path : str
+        Local path of the JSON file.
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(dataclasses.asdict(peak), f)
+
+
+def read_peak_memory_json(path: str) -> PeakMemory:
+    """
+    Read peaks written by write_peak_memory_json().
+
+    Parameters
+    ----------
+    path : str
+        Local path of the JSON file.
+
+    Returns
+    -------
+    PeakMemory
+        The peaks in the file.
+    """
+    with open(path, encoding="utf-8") as f:
+        return PeakMemory(**json.load(f))
