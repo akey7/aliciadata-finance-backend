@@ -16,13 +16,14 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
 
  scripts/run_optimization_and_time_series.py      entry point
    ├─ config.py ◄── config/modeling_and_optimization.yml
+   ├─ backfill.py                                 --past-days: one run per date, oldest first
    ├─ memory_usage.py                             peak memory, printed after the run
    └─ pipeline.py                                 runs the steps below
         │
  [Massive.com API] ──► 1. PRICES
                          data/ticker_download_manager.py   download, cache in input/annual/
                          data/date_manager.py              NYSE trading calendar
-                         data/prices.py                    wide price table, recent sessions
+                         data/prices.py                    wide price table, cut off at the as-of date, recent sessions
         │
         ├────────────────────────────────┐   (run in order: 2, then 3)
         ▼                                ▼
@@ -105,6 +106,7 @@ aliciadata-finance-backend/
 │   ├── run_optimization_and_time_series.py
 │   └── ticker_download_to_csv.py
 ├── src/aliciadata_finance_backend/ # IMPORT these: reusable library code, no entry points
+│   ├── backfill.py               # --past-days: one download, the checks, the per-date loop and log
 │   ├── config.py                 # Loads and validates the model settings file
 │   ├── memory_usage.py           # Peak memory of a run, printed by the entry script
 │   ├── pipeline.py               # One full run: prices → ARIMA → metrics → optimization → backtest → uploads
@@ -138,7 +140,13 @@ The backend uses the following folders. You don't need to create them: the scrip
    output/time_series/YYYY-MM-DD/all_forecasts_metadata.yml
    ```
 
-   Re-running for the same date overwrites that date's files, except that ARIMA training is skipped when that date's `all_forecasts.csv` already exists (unless `--retrain-arima` is given). See `INTERFACE_CONTRACT.md` for the bucket layout the frontend reads.
+   Re-running for the same date overwrites that date's files, except that ARIMA training is skipped when that date's `all_forecasts.csv` already exists (unless `--retrain-arima` is given). A run for a past date (`--as-of`, or each date of a `--past-days` backfill) writes that date's folder the same way. See `INTERFACE_CONTRACT.md` for the bucket layout the frontend reads.
+
+   A backfill also writes one table of its dates, which is not uploaded:
+
+   ```
+   output/backfill/backfill_YYYYMMDDTHHMMSSZ.csv   (UTC start time; one row per date)
+   ```
 
 An older `input/monthly/` folder, if present, is no longer used and can be deleted.
 
@@ -157,10 +165,11 @@ These modules are imported by the scripts and are not meant to be executed direc
 
 | Module (under `src/aliciadata_finance_backend/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `backfill.py`                               | One-time backfill (`--past-days N`): one price download long enough for the oldest date, an early check that every session and close the runs need is present, the risk-free cache filled once, then one run per date, oldest first, each in its own process (the entry script with `--as-of` and the pinned cache date). Dates already complete (in the bucket's folders when uploading) are skipped unless `--force`; a failed date does not stop the others; each date's status, time, and peak memory go to `output/backfill/`. | No (each run uploads its own date) |
 | `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`. | No |
 | `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache.                                                                               | No                                   |
 | `data/date_manager.py`                      | Date and business day calculations on the NYSE trading calendar (via `exchange_calendars`).                                                             | No                                   |
-| `data/prices.py`                            | Pivots downloaded prices to a wide table and selects the most recent trading sessions.                                                                 | No                                   |
+| `data/prices.py`                            | Pivots downloaded prices to a wide table, cuts it off at an as-of date (so a run for a past date sees no later price), and selects the most recent trading sessions.                                                                 | No                                   |
 | `optimization/problem.py`                   | `PortfolioProblem`, the one definition of the optimization: mean and covariance estimates, risk-free rate, the constraint set (`bounds()`, `constraints()`: long-only, sum to 1, configurable cap), `portfolio_stats()` (every uploaded return, volatility, and Sharpe ratio), a seeded sampler of feasible random portfolios, and the annualization helpers. | No |
 | `optimization/portfolio.py`                 | Max Sharpe ratio and minimum variance optimizations under the shared constraints (raising `OptimizationError` if one does not converge), the maximum return portfolio (exact, in closed form), the efficient frontier (unreachable targets become `NaN`), and retrieval of the risk-free rate history, with the rate available before a given date. | No |
 | `optimization/workflow.py`                  | One full optimization run from prices to annualized results, all from one `PortfolioProblem`: the capital allocation line, the invariant checks (`InvariantError`), the random-portfolio summary, the `.h5` and `.yml` writers, and a read-back check that the two files agree. The `.yml` holds the weights of both the max Sharpe ratio and the minimum variance portfolios, with a comment marking `optimum_portfolio` as the max Sharpe ratio portfolio. | No |
@@ -171,7 +180,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. | No |
 | `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
-| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints.                       | Yes (other modules use it to upload) |
+| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints. Also checks whether an object exists (`object_exists()`), which a backfill uses to skip dates already complete.                       | Yes (other modules use it to upload) |
 
 ## More Engineering Reading
 

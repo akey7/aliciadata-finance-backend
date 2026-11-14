@@ -37,8 +37,31 @@ Options:
 | `--refresh-data` | Download prices again even if today's download is cached. |
 | `--workers N` | Number of worker processes for ARIMA training. Defaults to half the logical CPUs (for example 8 on a 16-thread Intel CPU, 5 on a 10-core M4). `--workers 1` trains everything in one process. The forecasts do not depend on this setting. |
 | `--config PATH` | Model settings file to use instead of `config/modeling_and_optimization.yml` (see below). |
+| `--as-of YYYY-MM-DD` | Run for a past NYSE session, as if the price data ended that day: later prices are cut off before any step uses them, and the results are written to, and uploaded under, that date's folder, replacing any files already there. The date must be a session in the price data; the download is lengthened to cover the sessions after it. Defaults to the latest session, and giving the latest session is the same as leaving it out. |
+| `--past-days N` | One-time backfill: run the whole pipeline for each of the N most recent sessions, oldest first, uploading each date as it finishes (see "Backfilling past dates" below). `--past-days 1` is the latest session only. Cannot be combined with `--as-of`. |
+| `--force` | With `--past-days`: recompute and overwrite dates that are already complete, instead of skipping them. |
 
 Nothing is uploaded unless every step succeeds. If a later step fails, the ARIMA forecasts already written to `output/` are reused on the next run.
+
+#### Backfilling past dates
+
+`--past-days N` fills in the N most recent dates at once, for example to give the dashboard's date selector a history to start from. It is meant to be run once, by hand; the daily run (for example from cron) is the normal command without it.
+
+```
+uv run python scripts/run_optimization_and_time_series.py --past-days 60
+```
+
+What it does:
+
+1. **One download.** Prices are downloaded once, long enough for the oldest date (that date's history plus one session per later date), or read from today's cached download if it is long enough. Before any date runs, the backfill checks that every ticker has a close on every NYSE session the runs need, and stops with the first ticker and date that is missing if not. The risk-free rate history is then fetched once, back to before the oldest date's first rebalance. Both caches in `input/` are named by the day the backfill started, and every date reads them, even if the backfill runs past midnight, so nothing is downloaded again.
+2. **One run per date, oldest first.** Each date is a full run of this script with `--as-of` that date, in its own process: it uses only prices up to that date, writes that date's folders in `output/`, and uploads them before the next date starts. `--no-upload`, `--retrain-arima`, `--workers`, and `--config` apply to every date; `--refresh-data` applies to the one download.
+3. **Skipping complete dates.** A date that is already complete is skipped, unless `--force` is given. When uploading, "complete" means available in the bucket's configured folders (its `optimization_metadata.yml` and `all_forecasts.csv` exist), so a backfill to dev does not make production skip any date. With `--no-upload`, it means the same two files exist in `output/`. A skipped or recomputed date reuses its cached ARIMA forecasts unless `--retrain-arima` is given. An interrupted backfill can therefore be resumed by running the same command again.
+4. **Failures.** A date that fails does not stop the others. At the end the backfill lists the failed dates, and the script exits with status 1 if any failed.
+5. **Per-date log.** Each date's status, run time, and peak memory (in MiB, as in "Peak memory" below) are appended to `output/backfill/backfill_<UTC start time>.csv` as it finishes, so even an interrupted backfill leaves its table. Each date runs in its own process because the peak memory counters cannot be reset within one process.
+
+Backfilled dates are computed with today's method, settings, and adjusted prices, which can differ from what was available on the date itself (for example after a later split). Their metadata files record when they were computed (`computed_at`) and the contract version (`contract_version`); see `INTERFACE_CONTRACT.md`, "Re-runs and past dates".
+
+Expect roughly one normal run's time per date, about 20 to 40 minutes for 60 dates on the M4 Pro machines. Try a backfill against the dev folders first.
 
 #### Peak memory
 

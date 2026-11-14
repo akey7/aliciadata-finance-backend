@@ -13,7 +13,10 @@ The forecasts and the backtest each have their own number of scored days.
 Order of operations:
 1. Price data: one download of price_download_sessions() trading days,
    cached per run date in input/annual/. A cached download too short for the
-   steps below is downloaded again once.
+   steps below is downloaded again once. With an as-of date (as_of_date), the
+   prices are cut off after that session before any step below sees them, so
+   the run is the one that data ending that day would give; the as-of date
+   names the date folder and the download also covers the sessions after it.
 2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
    cached as output/time_series/<as-of date>/all_forecasts.csv. Metrics on
    those forecasts are written next to it as all_forecasts_metadata.yml.
@@ -39,6 +42,7 @@ Network, S3, and model training are passed in as dependencies so the
 orchestration can be tested without them.
 """
 
+import datetime
 import os
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -52,7 +56,12 @@ from aliciadata_finance_backend.data.date_manager import (
     DateManager,
     nyse_sessions_ending,
 )
-from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.prices import (
+    last_n_sessions,
+    pivot_close_wide,
+    sessions_through,
+    weekdays_after,
+)
 from aliciadata_finance_backend.data.ticker_download_manager import (
     TickerDownloadManager,
 )
@@ -88,6 +97,7 @@ from aliciadata_finance_backend.optimization.workflow import (
 from aliciadata_finance_backend.storage.layout import (
     ALL_FORECASTS_FILENAME,
     ALL_FORECASTS_METADATA_FILENAME,
+    CONTRACT_VERSION,
     OPTIMIZATION_METADATA_FILENAME,
     OPTIMIZATION_PLOT_DATA_FILENAME,
     OUTPUT_ROOT,
@@ -118,6 +128,48 @@ def required_sessions(
     optimization's window is the last part of the backtest's. Pure function.
     """
     return max(ts_config.arima_window_sessions, bt_config.sessions_needed)
+
+
+def first_rebalance_date(
+    wide_df: pd.DataFrame, bt_config: PortfolioBacktestConfig
+) -> pd.Timestamp:
+    """
+    The backtest's first rebalance date for prices ending on their last
+    session: the close that ends the first training window of the last
+    PortfolioBacktestConfig.sessions_needed sessions. It is the run's
+    earliest optimization date, so the risk-free rate history must reach
+    back before it. Pure function.
+    """
+    backtest_prices = last_n_sessions(wide_df, bt_config.sessions_needed)
+    return backtest_prices.index[bt_config.training_window_returns]
+
+
+def utc_timestamp(now: datetime.datetime | None = None) -> str:
+    """
+    A UTC time as YYYY-MM-DDTHH:MM:SSZ: now, if given (a naive datetime is
+    taken to be UTC), otherwise the current time.
+    """
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    elif now.tzinfo is not None:
+        now = now.astimezone(datetime.timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def with_provenance(metadata: dict, computed_at: str) -> dict:
+    """
+    A metadata file's contents with its provenance added: computed_at (when
+    the run computed it, UTC) and contract_version (the version of
+    docs/INTERFACE_CONTRACT.md it follows, layout.CONTRACT_VERSION). Both
+    say when and how a date folder was made, which matters because a run
+    for a past date makes it after that date. Pure function; the input is
+    not modified.
+    """
+    return {
+        **metadata,
+        "computed_at": computed_at,
+        "contract_version": CONTRACT_VERSION,
+    }
 
 
 def price_download_sessions(
@@ -168,7 +220,7 @@ class PipelineResult:
     uploaded: tuple[str, ...]
 
 
-def _upload_folders() -> tuple[str, str]:
+def upload_folders() -> tuple[str, str]:
     """
     Check the environment for everything an upload needs, and return the
     time series and portfolio optimization folder names. Raises RuntimeError
@@ -183,6 +235,46 @@ def _upload_folders() -> tuple[str, str]:
             "or run with --no-upload."
         )
     return values[TIME_SERIES_FOLDER_ENV], values[PORTFOLIO_FOLDER_ENV]
+
+
+def _prices_through(
+    all_prices: pd.DataFrame, as_of_date: pd.Timestamp | None
+) -> pd.DataFrame:
+    """
+    The prices a run may use: all of them when as_of_date is None, otherwise
+    only the sessions on or before it (data.prices.sessions_through()).
+    Raises ValueError if as_of_date is after the latest session in the data,
+    which no longer download can fix.
+    """
+    if as_of_date is None:
+        return all_prices
+    latest = all_prices.index.max()
+    if len(all_prices) and as_of_date.normalize() > latest.normalize():
+        raise ValueError(
+            f"The as-of date {as_of_date:%Y-%m-%d} is after the latest session in "
+            f"the price data ({latest:%Y-%m-%d})."
+        )
+    return sessions_through(all_prices, as_of_date)
+
+
+def _check_as_of_is_a_session(
+    wide_df: pd.DataFrame, as_of_date: pd.Timestamp | None
+) -> None:
+    """
+    Raise ValueError unless as_of_date (when given) is the last session of
+    wide_df, the prices already cut off at it: otherwise it is a weekend, an
+    NYSE holiday, or a session missing from the data, and the run would
+    silently use an earlier date.
+    """
+    if as_of_date is None:
+        return
+    last = wide_df.index.max()
+    if last.normalize() != as_of_date.normalize():
+        raise ValueError(
+            f"The as-of date {as_of_date:%Y-%m-%d} is not a session in the price "
+            f"data (a weekend, an NYSE holiday, or a session missing from the "
+            f"data); the last session before it is {last:%Y-%m-%d}."
+        )
 
 
 def run_pipeline(
@@ -205,6 +297,9 @@ def run_pipeline(
     ] = nyse_sessions_ending,
     dm: DateManager | None = None,
     output_root: str = OUTPUT_ROOT,
+    as_of_date: pd.Timestamp | None = None,
+    cache_date: str | None = None,
+    computed_at: str | None = None,
 ) -> PipelineResult:
     """
     Run the whole backend: prices, ARIMA forecasts, portfolio optimization,
@@ -231,8 +326,9 @@ def run_pipeline(
     refresh_data : bool, optional
         If True, download prices again even if today's download is cached.
         Even when False, a cached download with fewer than
-        required_sessions() sessions (e.g. one written before the ARIMA
-        window grew) is downloaded again once.
+        required_sessions() sessions up to the as-of date (e.g. one written
+        before the ARIMA window grew, or too short for a past as_of_date) is
+        downloaded again once.
 
     arima_workers : int, optional
         Number of worker processes for ARIMA training. Defaults to None,
@@ -263,41 +359,86 @@ def run_pipeline(
     output_root : str, optional
         Root of the local output folder. Defaults to "output".
 
+    as_of_date : pd.Timestamp, optional
+        Run as if the price data ended on this NYSE session: every later
+        price is removed (data.prices.sessions_through()) before any step
+        uses the data, so the forecasts, optimization, backtest, risk-free
+        rate, and date folder are exactly those of a run on data ending that
+        day, with no look-ahead. The download is lengthened to cover the
+        sessions after it. Defaults to None, the latest session in the data.
+        A date equal to that latest session gives the same run as None.
+
+    cache_date : str, optional
+        A fixed "today", YYYY-MM-DD, for the default DateManager (and so for
+        the default TickerDownloadManager), which names the price and
+        risk-free rate caches in input/. A backfill passes the day it
+        downloaded on, so every one of its runs reads those files. Ignored
+        for any dependency passed in. Defaults to None, the current date.
+
+    computed_at : str, optional
+        When the run computed its results, written as computed_at to the
+        three metadata files with contract_version (see with_provenance()).
+        Defaults to None, the current UTC time when the run starts, as
+        YYYY-MM-DDTHH:MM:SSZ; tests pass a fixed value.
+
     Returns
     -------
     PipelineResult
         Summary of the run.
+
+    Raises
+    ------
+    ValueError
+        If the prices cover fewer than required_sessions() sessions up to
+        the as-of date, or as_of_date is after the latest session in the
+        data or is not a session in it (a weekend, an NYSE holiday, or a
+        session missing from the data).
     """
     if upload:
-        time_series_folder, portfolio_folder = _upload_folders()
+        time_series_folder, portfolio_folder = upload_folders()
         uploader = uploader if uploader is not None else S3Uploader()
+    if computed_at is None:
+        computed_at = utc_timestamp()
 
-    # 1. Prices
+    # 1. Prices. For a past as-of date, every later session is cut off here,
+    # before any step sees the data, and the download also covers the
+    # sessions after it.
     n_required = required_sessions(ts_config, bt_config)
     n_download = price_download_sessions(ts_config, bt_config)
     arima_sessions = ts_config.arima_window_sessions
     backtest_sessions = bt_config.sessions_needed
-    tdm = tdm if tdm is not None else TickerDownloadManager(PRICE_DOWNLOAD_FOLDER)
-    dm = dm if dm is not None else DateManager()
+    dm = dm if dm is not None else DateManager(today=cache_date)
+    if tdm is None:
+        tdm = TickerDownloadManager(PRICE_DOWNLOAD_FOLDER, dm=dm)
     long_df, start_date, end_date = tdm.get_latest_tickers(
         days_in_past=n_download, use_cache=not refresh_data
     )
-    wide_df = pivot_close_wide(long_df)
-    if len(wide_df) < n_required and not refresh_data:
-        print(
-            f"Cached prices cover {len(wide_df)} sessions, fewer than the "
-            f"{n_required} needed; downloading again."
-        )
-        long_df, start_date, end_date = tdm.get_latest_tickers(
-            days_in_past=n_download, use_cache=False
-        )
-        wide_df = pivot_close_wide(long_df)
+    all_prices = pivot_close_wide(long_df)
+    wide_df = _prices_through(all_prices, as_of_date)
+    if len(wide_df) < n_required:
+        # A past as-of date needs the sessions after it too. Counting
+        # weekdays up to the latest session overestimates them slightly,
+        # which only lengthens the download.
+        n_needed = n_download
+        if as_of_date is not None and len(all_prices):
+            n_needed += weekdays_after(as_of_date, all_prices.index.max())
+        if not refresh_data or n_needed > n_download:
+            print(
+                f"Prices cover {len(wide_df)} sessions up to the as-of date, fewer "
+                f"than the {n_required} needed; downloading again."
+            )
+            long_df, start_date, end_date = tdm.get_latest_tickers(
+                days_in_past=n_needed, use_cache=False
+            )
+            all_prices = pivot_close_wide(long_df)
+            wide_df = _prices_through(all_prices, as_of_date)
     if len(wide_df) < n_required:
         raise ValueError(
-            f"Downloaded prices cover {len(wide_df)} sessions, fewer than the "
-            f"{n_required} needed for ARIMA ({arima_sessions}) and the backtest "
-            f"({backtest_sessions})."
+            f"Downloaded prices cover {len(wide_df)} sessions up to the as-of date, "
+            f"fewer than the {n_required} needed for ARIMA ({arima_sessions}) and "
+            f"the backtest ({backtest_sessions})."
         )
+    _check_as_of_is_a_session(wide_df, as_of_date)
     print(f"Loaded data from {start_date} to {end_date}")
     as_of = as_of_date_str(wide_df.index)
     print(f"Results will be stored under {as_of}/")
@@ -331,13 +472,16 @@ def run_pipeline(
         )
     )
     write_forecast_metadata(
-        build_forecast_metadata(
-            forecasts_df,
-            tdm.tickers,
-            window_start,
-            window_end,
-            eval_days=ts_config.evaluation_window_length,
-            training_window_returns=ts_config.training_window_returns,
+        with_provenance(
+            build_forecast_metadata(
+                forecasts_df,
+                tdm.tickers,
+                window_start,
+                window_end,
+                eval_days=ts_config.evaluation_window_length,
+                training_window_returns=ts_config.training_window_returns,
+            ),
+            computed_at,
         ),
         forecasts_metadata_path,
     )
@@ -347,8 +491,7 @@ def run_pipeline(
     # the backtest's first rebalance, the earliest optimization date, which
     # is the close that ends the first training window.
     backtest_prices = last_n_sessions(wide_df, backtest_sessions)
-    first_rebalance_date = backtest_prices.index[bt_config.training_window_returns]
-    tb3m_df = risk_free_history_getter(dm, first_rebalance_date)
+    tb3m_df = risk_free_history_getter(dm, first_rebalance_date(wide_df, bt_config))
     risk_free_rate_data = risk_free_rate_before(tb3m_df, wide_df.index[-1])
     print(risk_free_rate_data)
     optimization_prices = last_n_sessions(wide_df, bt_config.training_window_closes)
@@ -370,7 +513,10 @@ def run_pipeline(
         )
     )
     write_optimization_metadata(
-        build_optimization_metadata(result, tdm.tickers, risk_free_rate_data),
+        with_provenance(
+            build_optimization_metadata(result, tdm.tickers, risk_free_rate_data),
+            computed_at,
+        ),
         metadata_path,
     )
     print(f"Saved {metadata_path}")
@@ -403,12 +549,15 @@ def run_pipeline(
         )
     )
     write_backtest_metadata(
-        build_backtest_metadata(
-            backtest_result,
-            tdm.tickers,
-            build_final_optimization(
-                result, risk_free_rate_data, optimization_prices.index
+        with_provenance(
+            build_backtest_metadata(
+                backtest_result,
+                tdm.tickers,
+                build_final_optimization(
+                    result, risk_free_rate_data, optimization_prices.index
+                ),
             ),
+            computed_at,
         ),
         backtest_metadata_path,
     )

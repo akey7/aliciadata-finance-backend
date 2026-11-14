@@ -13,6 +13,11 @@ S3_PORTFOLIO_OPTIMIZATION_FOLDER or S3_TIME_SERIES_FOLDER). The local path
 minus its "output/<kind>/" part equals the object key minus its "<folder>/"
 part, so the two layouts cannot drift apart. All functions here are pure
 except ensure_parent_dir().
+
+A backfill (scripts/run_optimization_and_time_series.py --past-days) also
+writes one table of its runs, which is not uploaded:
+
+    output/backfill/backfill_<started, YYYYMMDDTHHMMSSZ>.csv
 """
 
 import os
@@ -32,6 +37,13 @@ ALL_FORECASTS_FILENAME = "all_forecasts.csv"
 ALL_FORECASTS_METADATA_FILENAME = "all_forecasts_metadata.yml"
 PORTFOLIO_BACKTEST_DAILY_FILENAME = "portfolio_backtest_daily.csv"
 PORTFOLIO_BACKTEST_METADATA_FILENAME = "portfolio_backtest_metadata.yml"
+
+# The version of docs/INTERFACE_CONTRACT.md that the uploaded files follow,
+# written to every metadata file as contract_version. A test checks that it
+# equals the version in that file, so bump both together.
+CONTRACT_VERSION = 48
+
+BACKFILL = "backfill"
 
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -167,6 +179,30 @@ def local_output_path(
     _validate_as_of(as_of)
     _validate_filename(filename)
     return os.path.join(output_root, kind, as_of, filename)
+
+
+def backfill_log_path(started: datetime, output_root: str = OUTPUT_ROOT) -> str:
+    """
+    Return the local path of a backfill's table of runs. Does not create
+    anything.
+
+    Parameters
+    ----------
+    started : datetime
+        When the backfill started, in UTC (any time zone is ignored; the
+        name ends in Z).
+
+    output_root : str, optional
+        Root output folder. Defaults to "output".
+
+    Returns
+    -------
+    str
+        "<output_root>/backfill/backfill_YYYYMMDDTHHMMSSZ.csv".
+    """
+    return os.path.join(
+        output_root, BACKFILL, f"backfill_{started.strftime('%Y%m%dT%H%M%SZ')}.csv"
+    )
 
 
 def ensure_parent_dir(path: str) -> str:

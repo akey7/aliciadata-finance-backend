@@ -102,3 +102,18 @@ def test_arima_next_trading_day_is_nyse_and_keeps_time():
     assert am.next_trading_day(
         thursday_before_good_friday
     ) == pd.Timestamp("2026-04-06 17:00:00")
+
+
+def test_date_manager_can_pin_today():
+    # A backfill pins "today" so its caches keep their names after midnight.
+    assert DateManager(today="2026-11-14").get_today_date() == "2026-11-14"
+
+
+def test_date_manager_defaults_to_the_current_date():
+    assert DateManager().get_today_date() == pd.Timestamp.now().strftime("%Y-%m-%d")
+
+
+@pytest.mark.parametrize("today", ["2026-11-31", "14/11/2026", "today"])
+def test_date_manager_rejects_a_bad_pinned_date(today):
+    with pytest.raises(ValueError):
+        DateManager(today=today)

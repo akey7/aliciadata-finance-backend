@@ -5,7 +5,10 @@ In-memory only, except ensure_parent_dir, which writes under pytest's
 tmp_path. Never touches the real input/ or output/ folders.
 """
 
+import datetime
 import os
+import re
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -13,6 +16,7 @@ import pytest
 from aliciadata_finance_backend.storage.layout import (
     ALL_FORECASTS_FILENAME,
     ALL_FORECASTS_METADATA_FILENAME,
+    CONTRACT_VERSION,
     OPTIMIZATION_METADATA_FILENAME,
     OPTIMIZATION_PLOT_DATA_FILENAME,
     OUTPUT_ROOT,
@@ -21,6 +25,7 @@ from aliciadata_finance_backend.storage.layout import (
     PORTFOLIO_OPTIMIZATION,
     TIME_SERIES,
     as_of_date_str,
+    backfill_log_path,
     bucket_key,
     ensure_parent_dir,
     local_output_path,
@@ -179,3 +184,24 @@ def test_ensure_parent_dir_is_idempotent(tmp_path):
 
 def test_ensure_parent_dir_bare_filename_is_noop():
     assert ensure_parent_dir("file.csv") == "file.csv"
+
+
+def test_contract_version_matches_the_interface_contract():
+    # The version written to every metadata file must be the version of
+    # docs/INTERFACE_CONTRACT.md; bump both together. Reads that file only.
+    contract = Path(__file__).resolve().parents[1] / "docs" / "INTERFACE_CONTRACT.md"
+    match = re.search(
+        r"^\| \*\*Contract version\*\* \| (\d+) \|$",
+        contract.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert match is not None
+    assert CONTRACT_VERSION == int(match.group(1))
+
+
+def test_backfill_log_path_is_under_output_backfill_named_by_utc_start():
+    started = datetime.datetime(2026, 11, 14, 9, 5, 3, tzinfo=datetime.timezone.utc)
+    assert backfill_log_path(started) == os.path.join(
+        OUTPUT_ROOT, "backfill", "backfill_20261114T090503Z.csv"
+    )
+    assert backfill_log_path(started, "elsewhere").startswith("elsewhere")
