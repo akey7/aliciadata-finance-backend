@@ -720,3 +720,187 @@ def test_forecasts_metadata_is_written_for_cached_forecasts(upload_env, deps):
     second = run_pipeline(**kwargs)  # Reuses the cached CSV.
     assert trainer.calls == []
     assert load_forecasts_metadata(second)["ticker_metrics"]
+
+
+# Runs for a past as-of date (as_of_date)
+
+# Sessions of synthetic data after the as-of date in these tests.
+LATER_SESSIONS = 7
+
+
+def prices_with_later_sessions() -> tuple[pd.DataFrame, pd.Timestamp]:
+    """
+    A full download plus LATER_SESSIONS more sessions, and the as-of date
+    that leaves exactly a full download's sessions up to it.
+    """
+    long_df = make_long_prices(n_sessions=N_SESSIONS + LATER_SESSIONS)
+    as_of = pivot_close_wide(long_df).index[-(LATER_SESSIONS + 1)].normalize()
+    return long_df, as_of
+
+
+def prices_up_to(long_df: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
+    """The rows of a long download dated on or before as_of."""
+    dates = pd.to_datetime(long_df["datetime"]).dt.normalize()
+    return long_df[dates <= as_of].reset_index(drop=True)
+
+
+def text_files(result) -> dict[str, str]:
+    """Every text output file of a run, by file name."""
+    paths = (
+        result.forecasts_path,
+        result.forecasts_metadata_path,
+        result.metadata_path,
+        result.backtest_daily_path,
+        result.backtest_metadata_path,
+    )
+    contents = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            contents[os.path.basename(path)] = f.read()
+    return contents
+
+
+def h5_contents(path: str) -> tuple[dict, dict]:
+    """The root attributes and every dataset of an .h5 file."""
+    with h5py.File(path, "r") as hf:
+        attrs = {key: hf.attrs[key] for key in hf.attrs}
+        datasets = {}
+        hf.visititems(
+            lambda name, obj: datasets.__setitem__(name, obj[()])
+            if isinstance(obj, h5py.Dataset)
+            else None
+        )
+    return attrs, datasets
+
+
+def assert_same_outputs(first, second) -> None:
+    assert first.as_of == second.as_of
+    assert text_files(first) == text_files(second)
+    first_attrs, first_data = h5_contents(first.plot_data_path)
+    second_attrs, second_data = h5_contents(second.plot_data_path)
+    assert first_attrs == second_attrs
+    assert first_data.keys() == second_data.keys()
+    for name in first_data:
+        assert np.array_equal(first_data[name], second_data[name], equal_nan=True), name
+
+
+def test_past_as_of_date_gives_the_files_of_data_ending_that_day(deps, tmp_path):
+    # No look-ahead: a run for a past as-of date, on data that continues after
+    # it, writes exactly the files of a run on data that genuinely ends then.
+    _, _, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+
+    trainer_past = FakeTrainer()
+    past = run_pipeline(
+        upload=False,
+        **{
+            **kwargs,
+            "tdm": FakeTickerDownloadManager(long_df),
+            "trainer": trainer_past,
+            "output_root": str(tmp_path / "past"),
+        },
+        as_of_date=as_of,
+    )
+    trainer_ended = FakeTrainer()
+    ended = run_pipeline(
+        upload=False,
+        **{
+            **kwargs,
+            "tdm": FakeTickerDownloadManager(prices_up_to(long_df, as_of)),
+            "trainer": trainer_ended,
+            "output_root": str(tmp_path / "ended"),
+        },
+    )
+    assert past.as_of == as_of.strftime("%Y-%m-%d")
+    # ARIMA saw the same windows, none reaching past the as-of date.
+    (past_window,) = trainer_past.calls
+    (ended_window,) = trainer_ended.calls
+    assert past_window.equals(ended_window)
+    assert past_window.index.max().normalize() == as_of
+    assert_same_outputs(past, ended)
+
+
+def test_past_as_of_date_is_uploaded_under_its_own_date(upload_env, deps):
+    _, _, uploader, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_df)
+    result = run_pipeline(**kwargs, as_of_date=as_of)
+    date = as_of.strftime("%Y-%m-%d")
+    assert all(f"/{date}/" in key for _, key in uploader.calls)
+    assert [key for _, key in uploader.calls][-1] == (
+        f"{PO_FOLDER}/{date}/optimization_metadata.yml"
+    )
+    forecasts = pd.read_csv(result.forecasts_path, index_col="pred_date")
+    assert pd.isna(forecasts.iloc[-1][SYNTHETIC_TICKERS[0]])  # The live row.
+
+
+def test_as_of_the_latest_session_is_a_normal_run(deps, tmp_path):
+    _, _, _, kwargs = deps
+    latest = wide_prices().index[-1].normalize()
+    normal = run_pipeline(
+        upload=False, **{**kwargs, "output_root": str(tmp_path / "normal")}
+    )
+    as_of = run_pipeline(
+        upload=False,
+        **{**kwargs, "trainer": FakeTrainer(), "output_root": str(tmp_path / "as_of")},
+        as_of_date=latest,
+    )
+    assert_same_outputs(normal, as_of)
+
+
+def test_cache_too_short_for_a_past_as_of_date_downloads_once_more(deps):
+    # The cached download ends on the latest session but has only a normal
+    # run's length, so it is short by the sessions after the as-of date; the
+    # new download asks for those too (counted as weekdays).
+    _, _, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    cached = long_df[
+        pd.to_datetime(long_df["datetime"])
+        >= pd.to_datetime(long_df["datetime"]).drop_duplicates().iloc[LATER_SESSIONS]
+    ].reset_index(drop=True)
+    tdm = FakeTickerDownloadManager(long_df, cached_df=cached)
+    kwargs["tdm"] = tdm
+    result = run_pipeline(upload=False, **kwargs, as_of_date=as_of)
+    assert result.as_of == as_of.strftime("%Y-%m-%d")
+    assert tdm.calls == [
+        {"days_in_past": PRICE_DOWNLOAD_SESSIONS, "use_cache": True},
+        {"days_in_past": PRICE_DOWNLOAD_SESSIONS + LATER_SESSIONS, "use_cache": False},
+    ]
+
+
+def test_as_of_date_after_the_latest_session_fails_before_any_output(
+    upload_env, deps, tmp_path
+):
+    tdm, trainer, uploader, kwargs = deps
+    later = wide_prices().index[-1].normalize() + pd.Timedelta(days=7)
+    with pytest.raises(ValueError, match="after the latest session"):
+        run_pipeline(**kwargs, as_of_date=later)
+    assert trainer.calls == []
+    assert uploader.calls == []
+    assert not os.path.exists(tmp_path / "output")
+
+
+def test_as_of_date_that_is_not_a_session_fails_before_any_output(
+    upload_env, deps, tmp_path
+):
+    # A weekend inside the data: the run must not silently use the Friday.
+    _, trainer, uploader, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_df)
+    saturday = next(
+        day
+        for day in pd.date_range(as_of, periods=7)
+        if day.dayofweek == 5
+    )
+    with pytest.raises(ValueError, match="not a session in the price data"):
+        run_pipeline(**kwargs, as_of_date=saturday)
+    assert trainer.calls == []
+    assert uploader.calls == []
+    assert not os.path.exists(tmp_path / "output")
+
+
+def test_as_of_date_with_too_little_history_fails(deps):
+    _, _, _, kwargs = deps
+    early = wide_prices().index[REQUIRED_SESSIONS - 2].normalize()
+    with pytest.raises(ValueError, match="fewer than"):
+        run_pipeline(upload=False, **kwargs, as_of_date=early)

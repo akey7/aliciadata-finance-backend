@@ -6,7 +6,12 @@ import pandas as pd
 import pytest
 
 from conftest import SYNTHETIC_SESSIONS, SYNTHETIC_TICKERS
-from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.prices import (
+    last_n_sessions,
+    pivot_close_wide,
+    sessions_through,
+    weekdays_after,
+)
 
 
 def test_pivot_close_wide_shape_columns_and_order(long_prices):
@@ -67,3 +72,53 @@ def test_last_n_sessions_returns_a_copy(long_prices):
 def test_last_n_sessions_rejects_non_positive(long_prices, bad_n):
     with pytest.raises(ValueError):
         last_n_sessions(pivot_close_wide(long_prices), bad_n)
+
+
+def test_sessions_through_keeps_dates_up_to_and_including_as_of(long_prices):
+    wide = pivot_close_wide(long_prices)
+    as_of = wide.index[9]  # Labeled 17:00; the time of day is ignored.
+    kept = sessions_through(wide, as_of.normalize())
+    assert list(kept.index) == list(wide.index[:10])
+    assert kept.equals(wide.iloc[:10])
+
+
+def test_sessions_through_ignores_the_time_of_day_of_as_of(long_prices):
+    wide = pivot_close_wide(long_prices)
+    as_of = wide.index[9].normalize() + pd.Timedelta(hours=23, minutes=59)
+    assert len(sessions_through(wide, as_of)) == 10
+
+
+def test_sessions_through_a_weekend_ends_on_the_friday_before(long_prices):
+    wide = pivot_close_wide(long_prices)
+    days = pd.date_range(wide.index[0].normalize(), periods=14)
+    saturday = next(d for d in days if d.dayofweek == 5)
+    kept = sessions_through(wide, saturday)
+    assert kept.index[-1].normalize() == saturday.normalize() - pd.Timedelta(days=1)
+
+
+def test_sessions_through_before_the_data_is_empty(long_prices):
+    wide = pivot_close_wide(long_prices)
+    assert sessions_through(wide, wide.index[0] - pd.Timedelta(days=1)).empty
+
+
+def test_sessions_through_returns_a_sorted_copy(long_prices):
+    wide = pivot_close_wide(long_prices)
+    kept = sessions_through(wide.iloc[::-1], wide.index[-1])
+    assert kept.index.is_monotonic_increasing
+    kept.iloc[0, 0] = -1.0
+    assert wide.iloc[0, 0] != -1.0
+
+
+@pytest.mark.parametrize(
+    "as_of, last, expected",
+    [
+        ("2026-11-06", "2026-11-13", 5),  # Friday to Friday: Mon-Fri.
+        ("2026-11-13", "2026-11-13", 0),  # Same day.
+        ("2026-11-13", "2026-11-06", 0),  # Last before as-of.
+        ("2026-11-13", "2026-11-16", 1),  # Over a weekend.
+        ("2026-11-25", "2026-11-27", 2),  # Counts Thanksgiving, an NYSE holiday.
+        ("2026-11-06 17:00", "2026-11-09 23:59", 1),  # Times of day ignored.
+    ],
+)
+def test_weekdays_after(as_of, last, expected):
+    assert weekdays_after(pd.Timestamp(as_of), pd.Timestamp(last)) == expected

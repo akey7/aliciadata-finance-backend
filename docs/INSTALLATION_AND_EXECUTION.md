@@ -37,6 +37,7 @@ Options:
 | `--refresh-data` | Download prices again even if today's download is cached. |
 | `--workers N` | Number of worker processes for ARIMA training. Defaults to half the logical CPUs (for example 8 on a 16-thread Intel CPU, 5 on a 10-core M4). `--workers 1` trains everything in one process. The forecasts do not depend on this setting. |
 | `--config PATH` | Model settings file to use instead of `config/modeling_and_optimization.yml` (see below). |
+| `--as-of YYYY-MM-DD` | Run for a past NYSE session, as if the price data ended that day: later prices are cut off before any step uses them, and the results are written to, and uploaded under, that date's folder, replacing any files already there. The date must be a session in the price data; the download is lengthened to cover the sessions after it. Defaults to the latest session, and giving the latest session is the same as leaving it out. |
 
 Nothing is uploaded unless every step succeeds. If a later step fails, the ARIMA forecasts already written to `output/` are reused on the next run.
 

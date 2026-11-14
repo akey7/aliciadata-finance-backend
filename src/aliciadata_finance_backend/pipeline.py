@@ -13,7 +13,10 @@ The forecasts and the backtest each have their own number of scored days.
 Order of operations:
 1. Price data: one download of price_download_sessions() trading days,
    cached per run date in input/annual/. A cached download too short for the
-   steps below is downloaded again once.
+   steps below is downloaded again once. With an as-of date (as_of_date), the
+   prices are cut off after that session before any step below sees them, so
+   the run is the one that data ending that day would give; the as-of date
+   names the date folder and the download also covers the sessions after it.
 2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
    cached as output/time_series/<as-of date>/all_forecasts.csv. Metrics on
    those forecasts are written next to it as all_forecasts_metadata.yml.
@@ -52,7 +55,12 @@ from aliciadata_finance_backend.data.date_manager import (
     DateManager,
     nyse_sessions_ending,
 )
-from aliciadata_finance_backend.data.prices import last_n_sessions, pivot_close_wide
+from aliciadata_finance_backend.data.prices import (
+    last_n_sessions,
+    pivot_close_wide,
+    sessions_through,
+    weekdays_after,
+)
 from aliciadata_finance_backend.data.ticker_download_manager import (
     TickerDownloadManager,
 )
@@ -185,6 +193,46 @@ def _upload_folders() -> tuple[str, str]:
     return values[TIME_SERIES_FOLDER_ENV], values[PORTFOLIO_FOLDER_ENV]
 
 
+def _prices_through(
+    all_prices: pd.DataFrame, as_of_date: pd.Timestamp | None
+) -> pd.DataFrame:
+    """
+    The prices a run may use: all of them when as_of_date is None, otherwise
+    only the sessions on or before it (data.prices.sessions_through()).
+    Raises ValueError if as_of_date is after the latest session in the data,
+    which no longer download can fix.
+    """
+    if as_of_date is None:
+        return all_prices
+    latest = all_prices.index.max()
+    if len(all_prices) and as_of_date.normalize() > latest.normalize():
+        raise ValueError(
+            f"The as-of date {as_of_date:%Y-%m-%d} is after the latest session in "
+            f"the price data ({latest:%Y-%m-%d})."
+        )
+    return sessions_through(all_prices, as_of_date)
+
+
+def _check_as_of_is_a_session(
+    wide_df: pd.DataFrame, as_of_date: pd.Timestamp | None
+) -> None:
+    """
+    Raise ValueError unless as_of_date (when given) is the last session of
+    wide_df, the prices already cut off at it: otherwise it is a weekend, an
+    NYSE holiday, or a session missing from the data, and the run would
+    silently use an earlier date.
+    """
+    if as_of_date is None:
+        return
+    last = wide_df.index.max()
+    if last.normalize() != as_of_date.normalize():
+        raise ValueError(
+            f"The as-of date {as_of_date:%Y-%m-%d} is not a session in the price "
+            f"data (a weekend, an NYSE holiday, or a session missing from the "
+            f"data); the last session before it is {last:%Y-%m-%d}."
+        )
+
+
 def run_pipeline(
     upload: bool = True,
     retrain_arima: bool = False,
@@ -205,6 +253,7 @@ def run_pipeline(
     ] = nyse_sessions_ending,
     dm: DateManager | None = None,
     output_root: str = OUTPUT_ROOT,
+    as_of_date: pd.Timestamp | None = None,
 ) -> PipelineResult:
     """
     Run the whole backend: prices, ARIMA forecasts, portfolio optimization,
@@ -231,8 +280,9 @@ def run_pipeline(
     refresh_data : bool, optional
         If True, download prices again even if today's download is cached.
         Even when False, a cached download with fewer than
-        required_sessions() sessions (e.g. one written before the ARIMA
-        window grew) is downloaded again once.
+        required_sessions() sessions up to the as-of date (e.g. one written
+        before the ARIMA window grew, or too short for a past as_of_date) is
+        downloaded again once.
 
     arima_workers : int, optional
         Number of worker processes for ARIMA training. Defaults to None,
@@ -263,16 +313,35 @@ def run_pipeline(
     output_root : str, optional
         Root of the local output folder. Defaults to "output".
 
+    as_of_date : pd.Timestamp, optional
+        Run as if the price data ended on this NYSE session: every later
+        price is removed (data.prices.sessions_through()) before any step
+        uses the data, so the forecasts, optimization, backtest, risk-free
+        rate, and date folder are exactly those of a run on data ending that
+        day, with no look-ahead. The download is lengthened to cover the
+        sessions after it. Defaults to None, the latest session in the data.
+        A date equal to that latest session gives the same run as None.
+
     Returns
     -------
     PipelineResult
         Summary of the run.
+
+    Raises
+    ------
+    ValueError
+        If the prices cover fewer than required_sessions() sessions up to
+        the as-of date, or as_of_date is after the latest session in the
+        data or is not a session in it (a weekend, an NYSE holiday, or a
+        session missing from the data).
     """
     if upload:
         time_series_folder, portfolio_folder = _upload_folders()
         uploader = uploader if uploader is not None else S3Uploader()
 
-    # 1. Prices
+    # 1. Prices. For a past as-of date, every later session is cut off here,
+    # before any step sees the data, and the download also covers the
+    # sessions after it.
     n_required = required_sessions(ts_config, bt_config)
     n_download = price_download_sessions(ts_config, bt_config)
     arima_sessions = ts_config.arima_window_sessions
@@ -282,22 +351,32 @@ def run_pipeline(
     long_df, start_date, end_date = tdm.get_latest_tickers(
         days_in_past=n_download, use_cache=not refresh_data
     )
-    wide_df = pivot_close_wide(long_df)
-    if len(wide_df) < n_required and not refresh_data:
-        print(
-            f"Cached prices cover {len(wide_df)} sessions, fewer than the "
-            f"{n_required} needed; downloading again."
-        )
-        long_df, start_date, end_date = tdm.get_latest_tickers(
-            days_in_past=n_download, use_cache=False
-        )
-        wide_df = pivot_close_wide(long_df)
+    all_prices = pivot_close_wide(long_df)
+    wide_df = _prices_through(all_prices, as_of_date)
+    if len(wide_df) < n_required:
+        # A past as-of date needs the sessions after it too. Counting
+        # weekdays up to the latest session overestimates them slightly,
+        # which only lengthens the download.
+        n_needed = n_download
+        if as_of_date is not None and len(all_prices):
+            n_needed += weekdays_after(as_of_date, all_prices.index.max())
+        if not refresh_data or n_needed > n_download:
+            print(
+                f"Prices cover {len(wide_df)} sessions up to the as-of date, fewer "
+                f"than the {n_required} needed; downloading again."
+            )
+            long_df, start_date, end_date = tdm.get_latest_tickers(
+                days_in_past=n_needed, use_cache=False
+            )
+            all_prices = pivot_close_wide(long_df)
+            wide_df = _prices_through(all_prices, as_of_date)
     if len(wide_df) < n_required:
         raise ValueError(
-            f"Downloaded prices cover {len(wide_df)} sessions, fewer than the "
-            f"{n_required} needed for ARIMA ({arima_sessions}) and the backtest "
-            f"({backtest_sessions})."
+            f"Downloaded prices cover {len(wide_df)} sessions up to the as-of date, "
+            f"fewer than the {n_required} needed for ARIMA ({arima_sessions}) and "
+            f"the backtest ({backtest_sessions})."
         )
+    _check_as_of_is_a_session(wide_df, as_of_date)
     print(f"Loaded data from {start_date} to {end_date}")
     as_of = as_of_date_str(wide_df.index)
     print(f"Results will be stored under {as_of}/")

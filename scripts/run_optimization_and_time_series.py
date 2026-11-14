@@ -8,9 +8,12 @@ Run from the repository root:
 
     uv run python scripts/run_optimization_and_time_series.py [--no-upload]
         [--retrain-arima] [--refresh-data] [--workers N] [--config PATH]
+        [--as-of YYYY-MM-DD]
 
 Model settings are read from config/modeling_and_optimization.yml (or
---config PATH).
+--config PATH). With --as-of, the run uses only prices up to that NYSE
+session, as if the data ended that day, and writes (and uploads) that date's
+folder.
 
 After a successful run, the script prints the peak memory of the main
 process and of the largest ARIMA worker (see memory_usage.py), to help size
@@ -18,6 +21,8 @@ the machine it runs on.
 """
 
 import argparse
+import datetime
+import pandas as pd
 from dotenv import load_dotenv
 from aliciadata_finance_backend.config import DEFAULT_CONFIG_PATH, load_config
 from aliciadata_finance_backend.forecasting.ticker_predict import default_worker_count
@@ -36,6 +41,18 @@ def positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
     return number
+
+
+def iso_date(value: str) -> pd.Timestamp:
+    """
+    argparse type for a date written as YYYY-MM-DD.
+    """
+    try:
+        return pd.Timestamp(datetime.date.fromisoformat(value))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"must be a date as YYYY-MM-DD, got {value!r}"
+        ) from None
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,6 +100,17 @@ def parse_args() -> argparse.Namespace:
             f"{DEFAULT_CONFIG_PATH}."
         ),
     )
+    parser.add_argument(
+        "--as-of",
+        type=iso_date,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "Run as if the price data ended on this NYSE session: later prices "
+            "are not used, and results go to (and are uploaded under) this "
+            "date's folder. Defaults to the latest session."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -107,6 +135,7 @@ def main() -> None:
         ts_config=config.time_series_models,
         po_config=config.portfolio_optimization,
         bt_config=config.portfolio_backtest,
+        as_of_date=args.as_of,
     )
     print(f"Done: {result.as_of} (ARIMA {'trained' if result.trained_arima else 'cached'})")
     for key in result.uploaded:

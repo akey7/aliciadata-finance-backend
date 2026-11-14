@@ -22,7 +22,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
  [Massive.com API] ──► 1. PRICES
                          data/ticker_download_manager.py   download, cache in input/annual/
                          data/date_manager.py              NYSE trading calendar
-                         data/prices.py                    wide price table, recent sessions
+                         data/prices.py                    wide price table, cut off at the as-of date, recent sessions
         │
         ├────────────────────────────────┐   (run in order: 2, then 3)
         ▼                                ▼
@@ -160,7 +160,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`. | No |
 | `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache.                                                                               | No                                   |
 | `data/date_manager.py`                      | Date and business day calculations on the NYSE trading calendar (via `exchange_calendars`).                                                             | No                                   |
-| `data/prices.py`                            | Pivots downloaded prices to a wide table and selects the most recent trading sessions.                                                                 | No                                   |
+| `data/prices.py`                            | Pivots downloaded prices to a wide table, cuts it off at an as-of date (so a run for a past date sees no later price), and selects the most recent trading sessions.                                                                 | No                                   |
 | `optimization/problem.py`                   | `PortfolioProblem`, the one definition of the optimization: mean and covariance estimates, risk-free rate, the constraint set (`bounds()`, `constraints()`: long-only, sum to 1, configurable cap), `portfolio_stats()` (every uploaded return, volatility, and Sharpe ratio), a seeded sampler of feasible random portfolios, and the annualization helpers. | No |
 | `optimization/portfolio.py`                 | Max Sharpe ratio and minimum variance optimizations under the shared constraints (raising `OptimizationError` if one does not converge), the maximum return portfolio (exact, in closed form), the efficient frontier (unreachable targets become `NaN`), and retrieval of the risk-free rate history, with the rate available before a given date. | No |
 | `optimization/workflow.py`                  | One full optimization run from prices to annualized results, all from one `PortfolioProblem`: the capital allocation line, the invariant checks (`InvariantError`), the random-portfolio summary, the `.h5` and `.yml` writers, and a read-back check that the two files agree. The `.yml` holds the weights of both the max Sharpe ratio and the minimum variance portfolios, with a comment marking `optimum_portfolio` as the max Sharpe ratio portfolio. | No |
