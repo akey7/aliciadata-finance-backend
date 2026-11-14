@@ -11,11 +11,20 @@ Run from the repository root:
 
 Model settings are read from config/modeling_and_optimization.yml (or
 --config PATH).
+
+After a successful run, the script prints the peak memory of the main
+process and of the largest ARIMA worker (see memory_usage.py), to help size
+the machine it runs on.
 """
 
 import argparse
 from dotenv import load_dotenv
 from aliciadata_finance_backend.config import DEFAULT_CONFIG_PATH, load_config
+from aliciadata_finance_backend.forecasting.ticker_predict import default_worker_count
+from aliciadata_finance_backend.memory_usage import (
+    format_peak_memory,
+    measure_peak_memory,
+)
 from aliciadata_finance_backend.pipeline import run_pipeline
 
 
@@ -81,7 +90,8 @@ def main() -> None:
     """
     Load the configuration file and .env, then run the pipeline with the
     command line options. The configuration is checked first, so a bad file
-    fails before any download.
+    fails before any download. Prints the uploaded keys and the run's peak
+    memory at the end.
     """
     args = parse_args()
     config = load_config(args.config)
@@ -101,6 +111,11 @@ def main() -> None:
     print(f"Done: {result.as_of} (ARIMA {'trained' if result.trained_arima else 'cached'})")
     for key in result.uploaded:
         print(f"  uploaded {key}")
+    # ARIMA uses worker processes only when it trains with more than one
+    # worker (see forecasting/ticker_predict.py, fit_windows()).
+    n_workers = args.workers if args.workers is not None else default_worker_count()
+    workers_ran = n_workers if result.trained_arima and n_workers > 1 else 0
+    print(format_peak_memory(measure_peak_memory(workers_ran)))
 
 
 if __name__ == "__main__":
