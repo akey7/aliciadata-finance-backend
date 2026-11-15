@@ -13,7 +13,7 @@ class TickerDownloadManager:
     API over a given range of trading days.
     """
 
-    def __init__(self, download_folder_name=".", tickers=None):
+    def __init__(self, download_folder_name=".", tickers=None, dm=None):
         """
         Instantiates the tickers this instance will download and
         where the data will be saved.
@@ -26,11 +26,16 @@ class TickerDownloadManager:
         tickers : list[str], optional
             The list of tickers to download. If left as none, will download
             the tickers given below.
+
+        dm : DateManager, optional
+            Supplies "today", which names the cache file and ends the
+            download range. Defaults to a DateManager for the current date;
+            a backfill passes one with a fixed date (see DateManager).
         """
         load_dotenv(override=True)
         massive_api_key = os.getenv("MASSIVE_API_KEY")
         self.massive_client = RESTClient(massive_api_key)
-        self.dm = DateManager()
+        self.dm = dm if dm is not None else DateManager()
         self.download_folder_name = download_folder_name
         if not tickers:
             self.tickers = [

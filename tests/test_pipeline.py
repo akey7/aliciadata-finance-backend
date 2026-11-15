@@ -6,6 +6,7 @@ S3 are replaced by in-memory doubles; files are written only under pytest's tmp_
 here touches the network, a bucket, or the real input/ and output/ folders.
 """
 
+import datetime
 import os
 
 import h5py
@@ -26,13 +27,18 @@ from aliciadata_finance_backend.data.prices import pivot_close_wide
 from aliciadata_finance_backend.pipeline import (
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
+    first_rebalance_date,
     price_download_sessions,
     required_sessions,
     run_pipeline,
+    utc_timestamp,
+    with_provenance,
 )
+from aliciadata_finance_backend.storage.layout import CONTRACT_VERSION
 from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
 SPACE = "test-space"
+COMPUTED_AT = "2026-11-14T12:00:00Z"
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
@@ -165,6 +171,8 @@ def deps(tmp_path):
         output_root=str(tmp_path / "output"),
         po_config=PO_CONFIG,
         bt_config=BT_CONFIG,
+        # Fixed, so files from two runs can be compared byte for byte.
+        computed_at=COMPUTED_AT,
     )
     return tdm, trainer, uploader, kwargs
 
@@ -720,3 +728,249 @@ def test_forecasts_metadata_is_written_for_cached_forecasts(upload_env, deps):
     second = run_pipeline(**kwargs)  # Reuses the cached CSV.
     assert trainer.calls == []
     assert load_forecasts_metadata(second)["ticker_metrics"]
+
+
+# Runs for a past as-of date (as_of_date)
+
+# Sessions of synthetic data after the as-of date in these tests.
+LATER_SESSIONS = 7
+
+
+def prices_with_later_sessions() -> tuple[pd.DataFrame, pd.Timestamp]:
+    """
+    A full download plus LATER_SESSIONS more sessions, and the as-of date
+    that leaves exactly a full download's sessions up to it.
+    """
+    long_df = make_long_prices(n_sessions=N_SESSIONS + LATER_SESSIONS)
+    as_of = pivot_close_wide(long_df).index[-(LATER_SESSIONS + 1)].normalize()
+    return long_df, as_of
+
+
+def prices_up_to(long_df: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
+    """The rows of a long download dated on or before as_of."""
+    dates = pd.to_datetime(long_df["datetime"]).dt.normalize()
+    return long_df[dates <= as_of].reset_index(drop=True)
+
+
+def text_files(result) -> dict[str, str]:
+    """Every text output file of a run, by file name."""
+    paths = (
+        result.forecasts_path,
+        result.forecasts_metadata_path,
+        result.metadata_path,
+        result.backtest_daily_path,
+        result.backtest_metadata_path,
+    )
+    contents = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            contents[os.path.basename(path)] = f.read()
+    return contents
+
+
+def h5_contents(path: str) -> tuple[dict, dict]:
+    """The root attributes and every dataset of an .h5 file."""
+    with h5py.File(path, "r") as hf:
+        attrs = {key: hf.attrs[key] for key in hf.attrs}
+        datasets = {}
+        hf.visititems(
+            lambda name, obj: datasets.__setitem__(name, obj[()])
+            if isinstance(obj, h5py.Dataset)
+            else None
+        )
+    return attrs, datasets
+
+
+def assert_same_outputs(first, second) -> None:
+    assert first.as_of == second.as_of
+    assert text_files(first) == text_files(second)
+    first_attrs, first_data = h5_contents(first.plot_data_path)
+    second_attrs, second_data = h5_contents(second.plot_data_path)
+    assert first_attrs == second_attrs
+    assert first_data.keys() == second_data.keys()
+    for name in first_data:
+        assert np.array_equal(first_data[name], second_data[name], equal_nan=True), name
+
+
+def test_past_as_of_date_gives_the_files_of_data_ending_that_day(deps, tmp_path):
+    # No look-ahead: a run for a past as-of date, on data that continues after
+    # it, writes exactly the files of a run on data that genuinely ends then.
+    _, _, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+
+    trainer_past = FakeTrainer()
+    past = run_pipeline(
+        upload=False,
+        **{
+            **kwargs,
+            "tdm": FakeTickerDownloadManager(long_df),
+            "trainer": trainer_past,
+            "output_root": str(tmp_path / "past"),
+        },
+        as_of_date=as_of,
+    )
+    trainer_ended = FakeTrainer()
+    ended = run_pipeline(
+        upload=False,
+        **{
+            **kwargs,
+            "tdm": FakeTickerDownloadManager(prices_up_to(long_df, as_of)),
+            "trainer": trainer_ended,
+            "output_root": str(tmp_path / "ended"),
+        },
+    )
+    assert past.as_of == as_of.strftime("%Y-%m-%d")
+    # ARIMA saw the same windows, none reaching past the as-of date.
+    (past_window,) = trainer_past.calls
+    (ended_window,) = trainer_ended.calls
+    assert past_window.equals(ended_window)
+    assert past_window.index.max().normalize() == as_of
+    assert_same_outputs(past, ended)
+
+
+def test_past_as_of_date_is_uploaded_under_its_own_date(upload_env, deps):
+    _, _, uploader, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_df)
+    result = run_pipeline(**kwargs, as_of_date=as_of)
+    date = as_of.strftime("%Y-%m-%d")
+    assert all(f"/{date}/" in key for _, key in uploader.calls)
+    assert [key for _, key in uploader.calls][-1] == (
+        f"{PO_FOLDER}/{date}/optimization_metadata.yml"
+    )
+    forecasts = pd.read_csv(result.forecasts_path, index_col="pred_date")
+    assert pd.isna(forecasts.iloc[-1][SYNTHETIC_TICKERS[0]])  # The live row.
+
+
+def test_as_of_the_latest_session_is_a_normal_run(deps, tmp_path):
+    _, _, _, kwargs = deps
+    latest = wide_prices().index[-1].normalize()
+    normal = run_pipeline(
+        upload=False, **{**kwargs, "output_root": str(tmp_path / "normal")}
+    )
+    as_of = run_pipeline(
+        upload=False,
+        **{**kwargs, "trainer": FakeTrainer(), "output_root": str(tmp_path / "as_of")},
+        as_of_date=latest,
+    )
+    assert_same_outputs(normal, as_of)
+
+
+def test_cache_too_short_for_a_past_as_of_date_downloads_once_more(deps):
+    # The cached download ends on the latest session but has only a normal
+    # run's length, so it is short by the sessions after the as-of date; the
+    # new download asks for those too (counted as weekdays).
+    _, _, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    cached = long_df[
+        pd.to_datetime(long_df["datetime"])
+        >= pd.to_datetime(long_df["datetime"]).drop_duplicates().iloc[LATER_SESSIONS]
+    ].reset_index(drop=True)
+    tdm = FakeTickerDownloadManager(long_df, cached_df=cached)
+    kwargs["tdm"] = tdm
+    result = run_pipeline(upload=False, **kwargs, as_of_date=as_of)
+    assert result.as_of == as_of.strftime("%Y-%m-%d")
+    assert tdm.calls == [
+        {"days_in_past": PRICE_DOWNLOAD_SESSIONS, "use_cache": True},
+        {"days_in_past": PRICE_DOWNLOAD_SESSIONS + LATER_SESSIONS, "use_cache": False},
+    ]
+
+
+def test_as_of_date_after_the_latest_session_fails_before_any_output(
+    upload_env, deps, tmp_path
+):
+    tdm, trainer, uploader, kwargs = deps
+    later = wide_prices().index[-1].normalize() + pd.Timedelta(days=7)
+    with pytest.raises(ValueError, match="after the latest session"):
+        run_pipeline(**kwargs, as_of_date=later)
+    assert trainer.calls == []
+    assert uploader.calls == []
+    assert not os.path.exists(tmp_path / "output")
+
+
+def test_as_of_date_that_is_not_a_session_fails_before_any_output(
+    upload_env, deps, tmp_path
+):
+    # A weekend inside the data: the run must not silently use the Friday.
+    _, trainer, uploader, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_df)
+    saturday = next(
+        day
+        for day in pd.date_range(as_of, periods=7)
+        if day.dayofweek == 5
+    )
+    with pytest.raises(ValueError, match="not a session in the price data"):
+        run_pipeline(**kwargs, as_of_date=saturday)
+    assert trainer.calls == []
+    assert uploader.calls == []
+    assert not os.path.exists(tmp_path / "output")
+
+
+def test_as_of_date_with_too_little_history_fails(deps):
+    _, _, _, kwargs = deps
+    early = wide_prices().index[REQUIRED_SESSIONS - 2].normalize()
+    with pytest.raises(ValueError, match="fewer than"):
+        run_pipeline(upload=False, **kwargs, as_of_date=early)
+
+
+# Provenance in the metadata files (contract v48)
+
+
+def test_every_metadata_file_records_when_and_by_which_contract(deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(upload=False, **kwargs)
+    for path in (
+        result.forecasts_metadata_path,
+        result.metadata_path,
+        result.backtest_metadata_path,
+    ):
+        with open(path) as f:
+            metadata = yaml.safe_load(f)
+        assert metadata["computed_at"] == COMPUTED_AT, path
+        assert metadata["contract_version"] == CONTRACT_VERSION, path
+
+
+def test_provenance_defaults_to_the_time_of_the_run(deps):
+    _, _, _, kwargs = deps
+    del kwargs["computed_at"]
+    before = utc_timestamp()
+    result = run_pipeline(upload=False, **kwargs)
+    after = utc_timestamp()
+    with open(result.metadata_path) as f:
+        computed_at = yaml.safe_load(f)["computed_at"]
+    assert before <= computed_at <= after  # ISO strings sort by time.
+
+
+def test_optimization_metadata_keeps_its_comment_with_provenance(deps):
+    _, _, _, kwargs = deps
+    result = run_pipeline(upload=False, **kwargs)
+    with open(result.metadata_path) as f:
+        text = f.read()
+    comment = "# optimum_portfolio is the maximum Sharpe ratio (tangency) portfolio."
+    assert comment in text
+
+
+def test_with_provenance_adds_both_keys_without_changing_the_input():
+    metadata = {"tickers": ["XBI"]}
+    assert with_provenance(metadata, COMPUTED_AT) == {
+        "tickers": ["XBI"],
+        "computed_at": COMPUTED_AT,
+        "contract_version": CONTRACT_VERSION,
+    }
+    assert metadata == {"tickers": ["XBI"]}
+
+
+def test_utc_timestamp_format_and_time_zone():
+    utc = datetime.datetime(2026, 11, 14, 9, 5, 3, tzinfo=datetime.timezone.utc)
+    assert utc_timestamp(utc) == "2026-11-14T09:05:03Z"
+    eastern = datetime.timezone(datetime.timedelta(hours=-5))
+    assert utc_timestamp(utc.astimezone(eastern)) == "2026-11-14T09:05:03Z"
+    naive = datetime.datetime(2026, 11, 14, 9, 5, 3)  # Taken to be UTC.
+    assert utc_timestamp(naive) == "2026-11-14T09:05:03Z"
+
+
+def test_first_rebalance_date_is_the_close_ending_the_first_training_window():
+    wide = wide_prices()
+    expected = wide.index[-BACKTEST_SESSIONS + BT_CONFIG.training_window_returns]
+    assert first_rebalance_date(wide, BT_CONFIG) == expected
