@@ -898,7 +898,7 @@ def test_as_of_date_that_is_not_a_session_fails_before_any_output(
     saturday = next(
         day
         for day in pd.date_range(as_of, periods=7)
-        if day.dayofweek == 5
+        if day.day_of_week == 5
     )
     with pytest.raises(ValueError, match="not a session in the price data"):
         run_pipeline(**kwargs, as_of_date=saturday)

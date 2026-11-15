@@ -71,6 +71,8 @@ After a successful run, after the uploads, the script prints the run's peak memo
 - **Largest ARIMA worker:** the peak of the largest worker process, shown only when ARIMA was trained with more than one worker. With cached forecasts (no `--retrain-arima` on a date already trained) or `--workers 1`, no workers run, and the main process's peak is the whole run's.
 - **Upper bound for all processes together:** main + workers × largest worker. The operating system reports each process's peak separately, not their combined peak, and the workers run at the same time as the main process, so the true combined peak is at most this.
 
+Peak memory is measured on macOS and Linux only, because the counters come from Python's Unix-only `resource` module. On Windows the run prints a note instead, and a backfill leaves the memory columns of its log empty; everything else runs as usual.
+
 The number of workers drives the total. To estimate a smaller machine, measure the worst case with the worker count it would use, for example `--retrain-arima --workers 2` (add `--no-upload` to leave the bucket alone). On Linux, the exact combined peak of the whole process tree is available from cgroups: run the command under `systemd-run --user --scope -p MemoryAccounting=yes …` and read that scope's `memory.peak`.
 
 Always run scripts from the repository root, because the scripts read and write `input/` and `output/` (and read `config/`) relative to the current working directory.

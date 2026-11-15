@@ -108,10 +108,7 @@ class TickerDownloadManager:
         df["datetime"] = df["datetime"].apply(
             lambda x: pd.Timestamp(x).replace(hour=23, minute=59, second=59)
         )
-        df.set_index("datetime", inplace=True)
-        df.drop("timestamp", axis=1, inplace=True)
-        df.sort_index(inplace=True)
-        return df
+        return df.set_index("datetime").drop(columns="timestamp").sort_index()
 
     def get_latest_tickers(
         self, days_in_past: int = 40, use_cache: bool = True
