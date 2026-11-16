@@ -1,7 +1,9 @@
 """
 Peak memory of a backend run, for sizing the machine it runs on, from the
 operating system's resource usage counters (the standard library's resource
-module; macOS and Linux only).
+module; macOS and Linux only). On Windows, which has no resource module,
+measure_peak_memory() returns None and nothing is measured; everything else
+here works on every platform.
 
 Two peaks are available, each the largest resident set size (physical RAM)
 of one process:
@@ -26,9 +28,16 @@ a backfill runs each day in its own process.
 
 import dataclasses
 import json
-import resource
 import sys
 from dataclasses import dataclass
+
+try:
+    import resource
+except ImportError:  # Windows has no resource module.
+    resource = None
+
+# Whether this platform can measure peak memory (see measure_peak_memory()).
+MEMORY_TRACKING_AVAILABLE = resource is not None
 
 BYTES_PER_KIB = 1024
 BYTES_PER_MIB = 1024**2
@@ -88,7 +97,7 @@ class PeakMemory:
         return self.main_bytes + self.workers * self.largest_worker_bytes
 
 
-def measure_peak_memory(workers: int) -> PeakMemory:
+def measure_peak_memory(workers: int) -> PeakMemory | None:
     """
     Read the peaks of this process and of its finished children so far.
 
@@ -99,9 +108,12 @@ def measure_peak_memory(workers: int) -> PeakMemory:
 
     Returns
     -------
-    PeakMemory
-        The peaks, in bytes.
+    PeakMemory or None
+        The peaks, in bytes, or None on a platform without the resource
+        module (Windows), where nothing is measured.
     """
+    if resource is None:
+        return None
     return PeakMemory(
         main_bytes=maxrss_bytes(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
         largest_worker_bytes=maxrss_bytes(

@@ -35,8 +35,7 @@ def pivot_close_wide(long_df: pd.DataFrame) -> pd.DataFrame:
     wide_df.index = pd.DatetimeIndex(
         [dt.replace(hour=17, minute=0, second=0) for dt in wide_df.index]
     )
-    wide_df.sort_index(inplace=True)
-    return wide_df
+    return wide_df.sort_index()
 
 
 def last_n_sessions(wide_df: pd.DataFrame, n_sessions: int) -> pd.DataFrame:

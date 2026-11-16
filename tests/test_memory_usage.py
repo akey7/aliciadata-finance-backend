@@ -2,7 +2,9 @@
 Tests for aliciadata_finance_backend.memory_usage: the ru_maxrss unit
 conversion on macOS and Linux, the upper bound for all processes, the
 printed report, and reading the counters (with resource.getrusage replaced
-by a fake, so the results do not depend on the test process).
+by a fake, so the results do not depend on the test process). Reading the
+counters needs the Unix-only resource module, so that test is skipped on
+Windows; the platform without it is tested by removing the module.
 """
 
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ import pytest
 from aliciadata_finance_backend import memory_usage
 from aliciadata_finance_backend.memory_usage import (
     BYTES_PER_MIB,
+    MEMORY_TRACKING_AVAILABLE,
     PeakMemory,
     format_peak_memory,
     maxrss_bytes,
@@ -66,6 +69,9 @@ def test_report_without_workers_says_the_main_peak_is_the_whole_run():
     assert "upper bound" not in report
 
 
+@pytest.mark.skipif(
+    not MEMORY_TRACKING_AVAILABLE, reason="the resource module is Unix-only"
+)
 def test_measure_reads_self_and_children_and_converts(monkeypatch):
     usage = {
         memory_usage.resource.RUSAGE_SELF: 300,
@@ -87,6 +93,11 @@ def test_measure_reads_self_and_children_and_converts(monkeypatch):
         largest_worker_bytes=200 * BYTES_PER_MIB,
         workers=3,
     )
+
+
+def test_measure_returns_none_without_the_resource_module(monkeypatch):
+    monkeypatch.setattr(memory_usage, "resource", None)
+    assert measure_peak_memory(workers=3) is None
 
 
 def test_peak_memory_survives_a_json_round_trip(tmp_path):

@@ -37,7 +37,7 @@ from aliciadata_finance_backend.pipeline import (
 from aliciadata_finance_backend.storage.layout import CONTRACT_VERSION
 from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
-SPACE = "test-space"
+BUCKET = "test-bucket"
 COMPUTED_AT = "2026-11-14T12:00:00Z"
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
@@ -149,7 +149,7 @@ class FakeUploader:
 
 @pytest.fixture
 def upload_env(monkeypatch):
-    monkeypatch.setenv(BUCKET_NAME_ENV, SPACE)
+    monkeypatch.setenv(BUCKET_NAME_ENV, BUCKET)
     monkeypatch.setenv(TIME_SERIES_FOLDER_ENV, TS_FOLDER)
     monkeypatch.setenv(PORTFOLIO_FOLDER_ENV, PO_FOLDER)
 
@@ -212,11 +212,11 @@ def test_full_run_writes_six_files_and_uploads_in_order(upload_env, deps):
     assert result.trained_arima is True
 
 
-def test_keys_never_contain_the_space_name(upload_env, deps):
-    # The Space is the S3 bucket; it must not also appear inside a key.
+def test_keys_never_contain_the_bucket_name(upload_env, deps):
+    # The bucket name must not also appear inside a key.
     _, _, uploader, kwargs = deps
     run_pipeline(**kwargs)
-    assert all(SPACE not in key for _, key in uploader.calls)
+    assert all(BUCKET not in key for _, key in uploader.calls)
 
 
 def test_local_layout_mirrors_object_keys(upload_env, deps, tmp_path):
@@ -898,7 +898,7 @@ def test_as_of_date_that_is_not_a_session_fails_before_any_output(
     saturday = next(
         day
         for day in pd.date_range(as_of, periods=7)
-        if day.dayofweek == 5
+        if day.day_of_week == 5
     )
     with pytest.raises(ValueError, match="not a session in the price data"):
         run_pipeline(**kwargs, as_of_date=saturday)

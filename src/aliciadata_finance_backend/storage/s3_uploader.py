@@ -6,11 +6,12 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 # Name of the environment variable holding the name of the one frontend
-# Space (S3 bucket). The two top-level folders inside it are named by
+# S3 bucket (on the Garage server; see "Deployment" in docs/SYSTEM_DESIGN.md).
+# The two top-level folders inside it are named by
 # S3_PORTFOLIO_OPTIMIZATION_FOLDER and S3_TIME_SERIES_FOLDER.
 BUCKET_NAME_ENV = "S3_BUCKET_NAME"
 
-# boto3's standard names for the Space's endpoint, region, and the backend's
+# boto3's standard names for the S3 server's endpoint, region, and the backend's
 # read/write/delete key. They are read here and passed to boto3 explicitly,
 # and every one must be set, so a missing value never makes boto3 fall back
 # to other credentials on the machine (such as ~/.aws/credentials) or to
@@ -20,8 +21,8 @@ REGION_ENV = "AWS_DEFAULT_REGION"
 ACCESS_KEY_ID_ENV = "AWS_ACCESS_KEY_ID"
 SECRET_ACCESS_KEY_ENV = "AWS_SECRET_ACCESS_KEY"
 
-# Error codes with which S3 (and DigitalOcean Spaces) answer HeadObject for a
-# key that does not exist.
+# Error codes with which S3 servers (including Garage) answer HeadObject for
+# a key that does not exist.
 NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
 # Every variable S3Uploader() needs, in the order they are reported missing.
@@ -36,13 +37,13 @@ REQUIRED_ENVS = (
 
 def validate_endpoint(endpoint_url: str | None, bucket_name: str) -> None:
     """
-    Raise ValueError unless endpoint_url is a region-only Spaces endpoint
-    such as https://nyc3.digitaloceanspaces.com.
+    Raise ValueError unless endpoint_url is the base URL of the S3 API, such
+    as https://<s3-host>, with no bucket name in its host and no path.
 
-    An endpoint that already names the Space, in its host
-    (https://<space>.<region>...) or its path (https://<region>.../<space>),
-    would make boto3 address the Space twice, so objects would silently land
-    under an extra "<space>/" prefix.
+    An endpoint that already names the bucket, in its host
+    (https://<bucket>.<s3-host>) or its path (https://<s3-host>/<bucket>),
+    would make boto3 address the bucket twice, so objects would silently land
+    under an extra "<bucket>/" prefix. Any other path is rejected too.
 
     Parameters
     ----------
@@ -50,7 +51,7 @@ def validate_endpoint(endpoint_url: str | None, bucket_name: str) -> None:
         The configured endpoint. None (boto3's default endpoint) is allowed.
 
     bucket_name : str
-        Name of the Space.
+        Name of the bucket.
     """
     if not endpoint_url:
         return
@@ -58,16 +59,16 @@ def validate_endpoint(endpoint_url: str | None, bucket_name: str) -> None:
     host_labels = (parsed.hostname or "").split(".")
     if host_labels[0] == bucket_name or parsed.path.strip("/"):
         raise ValueError(
-            f"{ENDPOINT_ENV} must be the region-only endpoint "
-            "(e.g. https://nyc3.digitaloceanspaces.com) without the Space name; "
-            f"{BUCKET_NAME_ENV} names the Space."
+            f"{ENDPOINT_ENV} must be the base URL of the S3 API "
+            "(e.g. https://<s3-host>), with no bucket name in its host and "
+            f"no path; {BUCKET_NAME_ENV} names the bucket."
         )
 
 
 class S3Uploader:
     """
     Manages uploads of optimization and modeling data to the one frontend
-    Space (S3 bucket).
+    S3 bucket.
     """
 
     def __init__(self):
@@ -84,7 +85,7 @@ class S3Uploader:
             that is missing.
 
         ValueError
-            If AWS_ENDPOINT_URL_S3 is not a region-only endpoint (see
+            If AWS_ENDPOINT_URL_S3 is not a valid endpoint (see
             validate_endpoint()).
         """
         load_dotenv(override=True)
@@ -104,7 +105,7 @@ class S3Uploader:
 
     def upload_file(self, local_filename: str, object_key: str) -> None:
         """
-        Uploads a file to the frontend Space. Prints a message after a
+        Uploads a file to the frontend bucket. Prints a message after a
         successful upload.
 
         Errors are not caught: any failure propagates to the caller, so a
@@ -116,7 +117,7 @@ class S3Uploader:
             Local path to file.
 
         object_key : str
-            Full object key in the Space, starting with the top-level folder,
+            Full object key in the bucket, starting with the top-level folder,
             e.g. "time-series/2026-10-09/all_forecasts.csv" (see
             storage.layout.object_key()).
 
@@ -129,7 +130,7 @@ class S3Uploader:
             If no credentials are available.
 
         boto3.exceptions.S3UploadFailedError, botocore.exceptions.ClientError
-            If S3 rejects the upload (e.g. a wrong Space name or
+            If S3 rejects the upload (e.g. a wrong bucket name or
             insufficient permissions).
         """
         self._client().upload_file(
@@ -141,13 +142,13 @@ class S3Uploader:
 
     def object_exists(self, object_key: str) -> bool:
         """
-        Whether an object with this key exists in the frontend Space, from a
+        Whether an object with this key exists in the frontend bucket, from a
         HeadObject request (which reads no content).
 
         Parameters
         ----------
         object_key : str
-            Full object key in the Space, as for upload_file().
+            Full object key in the bucket, as for upload_file().
 
         Returns
         -------
@@ -170,7 +171,7 @@ class S3Uploader:
         return True
 
     def _client(self):
-        """An S3 client for the Space, with this instance's settings."""
+        """An S3 client for the bucket, with this instance's settings."""
         session = boto3.session.Session()
         return session.client(
             "s3",
