@@ -71,6 +71,8 @@ After a successful run, after the uploads, the script prints the run's peak memo
 - **Largest ARIMA worker:** the peak of the largest worker process, shown only when ARIMA was trained with more than one worker. With cached forecasts (no `--retrain-arima` on a date already trained) or `--workers 1`, no workers run, and the main process's peak is the whole run's.
 - **Upper bound for all processes together:** main + workers × largest worker. The operating system reports each process's peak separately, not their combined peak, and the workers run at the same time as the main process, so the true combined peak is at most this.
 
+Peak memory is measured on macOS and Linux only, because the counters come from Python's Unix-only `resource` module. On Windows the run prints a note instead, and a backfill leaves the memory columns of its log empty; everything else runs as usual.
+
 The number of workers drives the total. To estimate a smaller machine, measure the worst case with the worker count it would use, for example `--retrain-arima --workers 2` (add `--no-upload` to leave the bucket alone). On Linux, the exact combined peak of the whole process tree is available from cgroups: run the command under `systemd-run --user --scope -p MemoryAccounting=yes …` and read that scope's `memory.peak`.
 
 Always run scripts from the repository root, because the scripts read and write `input/` and `output/` (and read `config/`) relative to the current working directory.
@@ -116,17 +118,23 @@ uv run pytest
 
 Run other development tools the same way, for example `uv run black .`.
 
+GitHub Actions also runs the tests on Linux for every pull request into `develop` or `main`, and on every push to them (`.github/workflows/tests.yml`). Its `tests` check must pass before a pull request into either branch can merge.
+
 ### Managing dependencies
 
 ```
-uv add <package>           # add a production dependency
-uv add --dev <package>     # add a development dependency
-uv remove <package>        # remove a dependency
-uv lock --upgrade          # upgrade all packages within the declared constraints
-uv sync                    # bring .venv in line with uv.lock
+uv add "<package>~=X.Y.Z"        # add a production dependency, pinned (see below)
+uv add --dev "<package>~=X.Y.Z"  # add a development dependency, pinned
+uv remove <package>              # remove a dependency
+uv lock --upgrade                # upgrade all packages within the declared constraints
+uv sync                          # bring .venv in line with uv.lock
 ```
 
+Every dependency in `pyproject.toml` is pinned to a major and minor version, with patch updates allowed: `~=X.Y.Z` means at least `X.Y.Z` and below `X.(Y+1)`. Always write three parts, because `~=X.Y` allows every minor version below `X+1`. A plain `uv add <package>` writes a `>=` constraint instead, so give the pin explicitly. `uv.lock` pins the exact version of every package, including indirect ones, so `uv lock --upgrade` applies only patch updates of the pinned packages.
+
 Commit both `pyproject.toml` and `uv.lock` whenever dependencies change.
+
+Dependabot (`.github/dependabot.yml`) checks for updates weekly and opens pull requests into `develop`. Minor and patch updates arrive together in one pull request; a minor update also raises its pin in `pyproject.toml`. Each major update arrives in a pull request of its own. Updates to the GitHub Actions in `.github/workflows/` arrive the same way. Security updates, switched on in the repository settings, open a pull request as soon as a vulnerability is reported. Every pull request runs the tests, and each is merged by hand. Before merging a major update, read its changelog: the tests cannot show that results such as forecasts or optimal weights are numerically unchanged.
 
 ### `.env` file
 
@@ -136,13 +144,13 @@ Here are the keys the scripts need to function:
 
 1. `MASSIVE_API_KEY`: Key to Massive.com API for stock and index data. Obtain from API provider.
 
-2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region (e.g. `nyc3`), and endpoint of the DigitalOcean Space. These are boto3's standard names. The key needs read/write/delete permission on the Space. `AWS_ENDPOINT_URL_S3` must be the region-only endpoint (e.g. `https://nyc3.digitaloceanspaces.com`) without the Space name; the uploader refuses to run otherwise. Obtain the values from DigitalOcean.
+2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region, and endpoint of the Garage S3 server on the Hetzner VPS (see "Deployment" in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md#deployment)). These are boto3's standard names. The key needs read/write/delete permission on the bucket. `AWS_DEFAULT_REGION` must equal the region Garage is configured with (its `s3_region` setting), or Garage rejects the request signatures. `AWS_ENDPOINT_URL_S3` is the base URL of Garage's S3 API (for example `https://<s3-host>`), with no bucket name in its host and no path; the uploader refuses to run otherwise. Obtain the key from Garage (a key with access to the bucket) and the endpoint and region from the VPS's configuration.
 
-3. `S3_BUCKET_NAME`: Name of the one DigitalOcean Space (S3 bucket) that holds all frontend data.
+3. `S3_BUCKET_NAME`: Name of the one S3 bucket that holds all frontend data.
 
-4. `S3_PORTFOLIO_OPTIMIZATION_FOLDER` and `S3_TIME_SERIES_FOLDER`: names of the two top-level folders inside that Space, holding the portfolio optimization and ARIMA time series data. Dev and production share the Space and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
+4. `S3_PORTFOLIO_OPTIMIZATION_FOLDER` and `S3_TIME_SERIES_FOLDER`: names of the two top-level folders inside that bucket, holding the portfolio optimization and ARIMA time series data. Dev and production share the bucket and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
 
-Items 2 through 4 connect the backend to the front end. An upload run fails before any work starts if any of them is missing or empty. The scripts load `.env` with its values taking precedence over variables of the same name already set in the shell, so AWS credentials exported for other work are never sent to DigitalOcean. These names replaced the `FSF_FRONT_END_*` names (contract v45); the old names are no longer read.
+Items 2 through 4 connect the backend to the front end. An upload run fails before any work starts if any of them is missing or empty. The scripts load `.env` with its values taking precedence over variables of the same name already set in the shell, so AWS credentials exported for other work are never sent to the storage server. These names replaced the `FSF_FRONT_END_*` names (contract v45); the old names are no longer read.
 
 ## Execution
 

@@ -26,7 +26,8 @@ backfill.py).
 
 After a successful run, the script prints the peak memory of the main
 process and of the largest ARIMA worker (see memory_usage.py), to help size
-the machine it runs on.
+the machine it runs on. Peak memory is measured on macOS and Linux only; on
+Windows the script says so instead.
 """
 
 import argparse
@@ -194,7 +195,8 @@ def run_one(args: argparse.Namespace, config: ModelingConfig) -> None:
     """
     Run the pipeline once, for the latest session or --as-of, then print the
     uploaded keys and the run's peak memory (also written to
-    --memory-report, if given, for a backfill to collect).
+    --memory-report, if given, for a backfill to collect). Where peak memory
+    cannot be measured (Windows), print a note instead and write no report.
     """
     result = run_pipeline(
         upload=not args.no_upload,
@@ -215,6 +217,9 @@ def run_one(args: argparse.Namespace, config: ModelingConfig) -> None:
     n_workers = args.workers if args.workers is not None else default_worker_count()
     workers_ran = n_workers if result.trained_arima and n_workers > 1 else 0
     peak = measure_peak_memory(workers_ran)
+    if peak is None:
+        print("Peak memory is not measured on this platform (macOS and Linux only).")
+        return
     print(format_peak_memory(peak))
     if args.memory_report:
         write_peak_memory_json(peak, args.memory_report)
@@ -253,7 +258,8 @@ def run_day_in_subprocess(
         start = time.monotonic()
         returncode = subprocess.run(command).returncode
         seconds = time.monotonic() - start
-        # A run that failed before measuring has written no report.
+        # A run that failed before measuring, or ran where memory is not
+        # measured (Windows), has written no report.
         peak = None
         if os.path.exists(report_path):
             peak = read_peak_memory_json(report_path)

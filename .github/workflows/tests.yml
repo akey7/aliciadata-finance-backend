@@ -1,0 +1,49 @@
+# Runs the test suite on every pull request into develop or main, and on
+# every push to them. The job name "tests" is the required status check in
+# the branch rulesets: renaming it means updating the rulesets too.
+#
+# Do not add path filters (paths / paths-ignore): a pull request that skipped
+# this workflow would never report the required check and could not merge.
+#
+# The tests are in-memory (no network, S3, input/, or output/), so this
+# workflow needs no secrets and runs the same for pull requests from forks.
+
+name: Tests
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request or branch cancels the older run.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # Uses the Python version in .python-version. --locked fails the run
+      # if uv.lock is out of date with pyproject.toml, instead of updating it.
+      - name: Install Python and the dependencies
+        run: uv sync --locked
+
+      - name: Run the tests
+        run: uv run pytest

@@ -32,7 +32,7 @@ Order of operations:
    consecutive NYSE sessions. Written to the same folder as the optimization
    and checked the same way. Its metadata also records step 3's result as
    final_optimization, and that record is checked against step 3's two files.
-5. Upload, only after every step above succeeded, to the one frontend Space
+5. Upload, only after every step above succeeded, to the one frontend bucket
    under <folder>/<as-of date>/: all_forecasts.csv, all_forecasts_metadata.yml,
    portfolio_optimization_plot_data.h5, portfolio_backtest_daily.csv,
    portfolio_backtest_metadata.yml, then optimization_metadata.yml last, so
@@ -185,7 +185,7 @@ def price_download_sessions(
 PRICE_DOWNLOAD_FOLDER = os.path.join("input", "annual")
 
 # Environment variables holding the names of the two top-level folders inside
-# the one frontend Space. Dev and production share the Space and differ only
+# the one frontend S3 bucket. Dev and production share the bucket and differ only
 # in these folder names.
 PORTFOLIO_FOLDER_ENV = "S3_PORTFOLIO_OPTIMIZATION_FOLDER"
 TIME_SERIES_FOLDER_ENV = "S3_TIME_SERIES_FOLDER"
@@ -194,7 +194,7 @@ TIME_SERIES_FOLDER_ENV = "S3_TIME_SERIES_FOLDER"
 class Uploader(Protocol):
     """
     Anything that uploads a local file to a full object key in the frontend
-    Space, e.g. S3Uploader.
+    bucket, e.g. S3Uploader.
     """
 
     def upload_file(self, local_filename: str, object_key: str) -> None: ...
@@ -224,7 +224,7 @@ def upload_folders() -> tuple[str, str]:
     """
     Check the environment for everything an upload needs, and return the
     time series and portfolio optimization folder names. Raises RuntimeError
-    naming every variable that is not set: the Space name and both folders.
+    naming every variable that is not set: the bucket name and both folders.
     """
     envs = (BUCKET_NAME_ENV, TIME_SERIES_FOLDER_ENV, PORTFOLIO_FOLDER_ENV)
     values = {env: os.getenv(env) for env in envs}
@@ -308,7 +308,7 @@ def run_pipeline(
     optimization_metadata.yml is uploaded last, a partially uploaded date is
     never marked complete, and re-running uploads it again.
 
-    The Space name (S3_BUCKET_NAME) and the two top-level folder names are
+    The bucket name (S3_BUCKET_NAME) and the two top-level folder names are
     read from the environment (load .env before calling). When upload is
     True they, and the endpoint, region, and credentials (via S3Uploader),
     are checked before any work starts, so a configuration error fails fast

@@ -91,7 +91,7 @@ def test_sessions_through_ignores_the_time_of_day_of_as_of(long_prices):
 def test_sessions_through_a_weekend_ends_on_the_friday_before(long_prices):
     wide = pivot_close_wide(long_prices)
     days = pd.date_range(wide.index[0].normalize(), periods=14)
-    saturday = next(d for d in days if d.dayofweek == 5)
+    saturday = next(d for d in days if d.day_of_week == 5)
     kept = sessions_through(wide, saturday)
     assert kept.index[-1].normalize() == saturday.normalize() - pd.Timedelta(days=1)
 

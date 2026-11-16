@@ -21,8 +21,8 @@ from aliciadata_finance_backend.storage.s3_uploader import (
     validate_endpoint,
 )
 
-SPACE = "test-space"
-REGION_ONLY_ENDPOINT = "https://nyc3.digitaloceanspaces.com"
+BUCKET = "test-bucket"
+BASE_ENDPOINT = "https://s3.example.com"
 
 
 class FakeClient:
@@ -58,9 +58,9 @@ def env(monkeypatch):
     monkeypatch.setattr(
         s3_module, "load_dotenv", lambda **kwargs: dotenv_calls.append(kwargs)
     )
-    monkeypatch.setenv(BUCKET_NAME_ENV, SPACE)
-    monkeypatch.setenv(ENDPOINT_ENV, REGION_ONLY_ENDPOINT)
-    monkeypatch.setenv(REGION_ENV, "nyc3")
+    monkeypatch.setenv(BUCKET_NAME_ENV, BUCKET)
+    monkeypatch.setenv(ENDPOINT_ENV, BASE_ENDPOINT)
+    monkeypatch.setenv(REGION_ENV, "garage")
     monkeypatch.setenv(ACCESS_KEY_ID_ENV, "test-key-id")
     monkeypatch.setenv(SECRET_ACCESS_KEY_ENV, "test-secret")
     return dotenv_calls
@@ -83,13 +83,13 @@ def fake_client(env, monkeypatch):
 # Uploading
 
 
-def test_upload_uses_space_as_bucket_and_full_key(fake_client, capsys):
+def test_upload_uses_the_bucket_name_and_full_key(fake_client, capsys):
     S3Uploader().upload_file("local.csv", "time-series/2026-10-12/all_forecasts.csv")
     assert fake_client["client"].calls == [
-        ("local.csv", SPACE, "time-series/2026-10-12/all_forecasts.csv")
+        ("local.csv", BUCKET, "time-series/2026-10-12/all_forecasts.csv")
     ]
-    assert fake_client["kwargs"]["endpoint_url"] == REGION_ONLY_ENDPOINT
-    assert fake_client["kwargs"]["region_name"] == "nyc3"
+    assert fake_client["kwargs"]["endpoint_url"] == BASE_ENDPOINT
+    assert fake_client["kwargs"]["region_name"] == "garage"
     assert fake_client["kwargs"]["aws_access_key_id"] == "test-key-id"
     assert fake_client["kwargs"]["aws_secret_access_key"] == "test-secret"
     assert "time-series/2026-10-12/all_forecasts.csv successful" in (
@@ -146,23 +146,23 @@ def test_dotenv_values_override_the_shell(env):
 @pytest.mark.parametrize(
     "endpoint",
     [
-        f"https://{SPACE}.nyc3.digitaloceanspaces.com",  # Space in the host
-        f"https://nyc3.digitaloceanspaces.com/{SPACE}",  # Space in the path
-        "https://nyc3.digitaloceanspaces.com/anything/",  # Any path
+        f"https://{BUCKET}.s3.example.com",  # Bucket in the host
+        f"https://s3.example.com/{BUCKET}",  # Bucket in the path
+        "https://s3.example.com/anything/",  # Any path
     ],
 )
-def test_space_specific_endpoints_are_rejected(env, monkeypatch, endpoint):
+def test_endpoints_naming_the_bucket_or_with_a_path_are_rejected(env, monkeypatch, endpoint):
     monkeypatch.setenv(ENDPOINT_ENV, endpoint)
-    with pytest.raises(ValueError, match="region-only"):
+    with pytest.raises(ValueError, match="base URL of the S3 API"):
         S3Uploader()
 
 
 @pytest.mark.parametrize(
     "endpoint",
-    [REGION_ONLY_ENDPOINT, REGION_ONLY_ENDPOINT + "/", None, ""],
+    [BASE_ENDPOINT, BASE_ENDPOINT + "/", None, ""],
 )
-def test_region_only_or_default_endpoints_are_accepted(endpoint):
-    validate_endpoint(endpoint, SPACE)  # Does not raise.
+def test_base_or_default_endpoints_are_accepted(endpoint):
+    validate_endpoint(endpoint, BUCKET)  # Does not raise.
 
 
 # Checking whether an object exists
@@ -172,7 +172,7 @@ def test_object_exists_for_a_present_key(fake_client):
     fake_client["client"] = FakeClient(keys={"po/2026-11-13/optimization_metadata.yml"})
     assert S3Uploader().object_exists("po/2026-11-13/optimization_metadata.yml")
     assert fake_client["client"].head_calls == [
-        (SPACE, "po/2026-11-13/optimization_metadata.yml")
+        (BUCKET, "po/2026-11-13/optimization_metadata.yml")
     ]
 
 

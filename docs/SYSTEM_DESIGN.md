@@ -4,6 +4,23 @@ This document describes the system design of the backend.
 
 Also of interest to an engineering audience is the [INTERFACE_CONTRACT.md](INTERFACE_CONTRACT.md) file, which describes the contract of data transmission from the backend to the frontend.
 
+## Deployment
+
+```text
+ [Mac mini, run by hand]                    [Hetzner VPS]
+   this backend          ── S3 uploads ──►    Caddy (reverse proxy)
+                                              Garage (S3-compatible storage)
+                                              frontend Gradio app
+                                              (each in a Docker container,
+                                               built and installed with Ansible)
+```
+
+- The results are stored in a self-hosted, S3-compatible object store, [Garage](https://garagehq.deuxfleurs.fr/), on a virtual private server (VPS) hosted by Hetzner.
+- Three services run on that VPS, each in its own Docker container: Garage, the frontend Gradio app, and a Caddy reverse proxy. The containers are built and installed onto the VPS with Ansible.
+- **This backend is not hosted on the VPS.** It runs by hand on a local machine (see [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md)) and uploads its results to Garage over the network through Garage's S3 API, as for any S3 service.
+- The frontend runs on the same VPS as the storage it reads. Its deployment is documented in the frontend repository.
+- For a proof-of-concept project, hosting everything the frontend needs on one VPS keeps deployment simple and hosting costs low and predictable.
+
 ## How the backend works
 
 One run of `scripts/run_optimization_and_time_series.py` downloads prices, then follows two paths, the time series forecasts and the portfolio optimization with its backtest, and finally uploads their results. The first diagram shows which module owns each part of a run; the second shows which files each step reads and writes, and the functions that write them.
@@ -46,10 +63,10 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
                          ▼
  4. UPLOAD   only if 2 and 3 both succeeded; skipped with --no-upload
     storage/layout.py        dated local paths and bucket keys
-    storage/s3_uploader.py   uploads to the DigitalOcean Space
+    storage/s3_uploader.py   uploads to the S3 bucket
                          │
                          ▼
-             [DigitalOcean Space]   (files in the next diagram)
+             [Garage S3 bucket on the VPS]   (files in the next diagram)
 ```
 
 - The two paths run one after the other in a single process. Within the time series path, the ARIMA fits for every ticker and day run at the same time in a pool of worker processes (`--workers`).
@@ -82,14 +99,14 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
                                                   (uploaded last: marks the date complete)
         │
         ▼
- UPLOAD   S3Uploader.upload_file(), to the Space named by S3_BUCKET_NAME
+ UPLOAD   S3Uploader.upload_file(), to the bucket named by S3_BUCKET_NAME
    output/time_series/<as-of>/*
        ─►  <S3_TIME_SERIES_FOLDER>/<as-of>/*
    output/portfolio_optimization/<as-of>/*
        ─►  <S3_PORTFOLIO_OPTIMIZATION_FOLDER>/<as-of>/*
 ```
 
-The local folders mirror the bucket keys (`storage/layout.py` builds both), so each local date folder maps to the same date folder in the Space. `INTERFACE_CONTRACT.md` describes what each uploaded file contains.
+The local folders mirror the bucket keys (`storage/layout.py` builds both), so each local date folder maps to the same date folder in the bucket. `INTERFACE_CONTRACT.md` describes what each uploaded file contains.
 
 ## Project structure
 
@@ -113,7 +130,7 @@ aliciadata-finance-backend/
 │   ├── data/                     # Market data download, caching, price reshaping, and date logic
 │   ├── optimization/             # Portfolio optimization math and its backtest
 │   ├── forecasting/              # ARIMA models and the walk-forward training workflow
-│   └── storage/                  # Output/bucket key layout and S3/Spaces uploads
+│   └── storage/                  # Output/bucket key layout and S3 uploads
 ├── tests/                        # Tests (use mocks and temporary directories only)
 ├── input/                        # Cached market data (not committed)
 └── output/                       # Results of runs (not committed)
@@ -177,10 +194,10 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/arima_models.py`               | Trains ARIMA models on price data.                                                                                                                      | No                                   |
 | `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA training over rolling windows; `load_or_train_forecasts` caches the result.                                      | No                                   |
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
-| `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. | No |
+| `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. macOS and Linux only: on Windows nothing is measured. | No |
 | `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
-| `storage/s3_uploader.py`                    | Uploads files to the one DigitalOcean Space (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects non-region-only endpoints. Also checks whether an object exists (`object_exists()`), which a backfill uses to skip dates already complete.                       | Yes (other modules use it to upload) |
+| `storage/s3_uploader.py`                    | Uploads files to the one S3 bucket (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects an endpoint that names the bucket or has a path. Also checks whether an object exists (`object_exists()`), which a backfill uses to skip dates already complete.                       | Yes (other modules use it to upload) |
 
 ## More Engineering Reading
 

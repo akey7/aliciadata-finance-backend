@@ -117,7 +117,7 @@ def test_every_pred_date_is_a_unique_nyse_session_after_the_window():
     dates = forecasts.index.normalize()
     assert forecasts.index.is_unique
     assert forecasts.index.is_monotonic_increasing
-    assert (dates.dayofweek < 5).all()
+    assert (dates.day_of_week < 5).all()
     assert not dates.isin(nyse_holidays()).any()
     # The first forecast comes after the first training window, not inside it.
     assert forecasts.index[0] > prices.index[0]

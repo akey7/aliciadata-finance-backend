@@ -1,0 +1,31 @@
+# Dependabot version updates, on GitHub's default weekly schedule. Each update
+# arrives as a pull request into the default branch (develop), so the tests
+# workflow checks it, and the branch ruleset blocks merging until it passes.
+# Every pull request is merged by hand; nothing merges automatically.
+#
+# Security updates are switched on in the repository's settings (Code
+# security), not here. They open a pull request as soon as an advisory
+# matches, regardless of this schedule. No target-branch is set, so these
+# settings also apply to them.
+version: 2
+updates:
+  # The actions in .github/workflows/, referenced by major version tag
+  # (for example actions/checkout@v4). Dependabot proposes new major tags.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Python dependencies in pyproject.toml and uv.lock. pyproject.toml pins
+  # each one to a major and minor version (~=X.Y.Z), so a patch update changes
+  # only uv.lock, and a minor or major update also raises the pin.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # One weekly pull request for all minor and patch updates. Major
+      # updates still arrive one per pull request, so each can be checked on
+      # its own.
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]

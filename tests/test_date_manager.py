@@ -41,7 +41,7 @@ def test_federal_only_holidays_are_trading_days(open_day):
 
 
 def test_nyse_holidays_contain_no_weekends():
-    assert (nyse_holidays().dayofweek < 5).all()
+    assert (nyse_holidays().day_of_week < 5).all()
 
 
 def test_nyse_sessions_ending_skips_closures_and_drops_the_time():
