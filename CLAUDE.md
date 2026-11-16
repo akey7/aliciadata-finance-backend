@@ -64,7 +64,7 @@ Run from the repo root (paths to `input/` and `output/` are relative to the work
 | `src/aliciadata_finance_backend/storage/layout.py` | Pure helpers for dated `output/` paths and bucket keys; the single source of truth for both layouts; also `CONTRACT_VERSION` (written to every metadata file) and the backfill log path | No | No |
 | `src/aliciadata_finance_backend/storage/s3_uploader.py` | S3 upload helper (Garage via boto3); `object_exists()` for the backfill's skip check | No | Used by others |
 
-`tests/` holds pytest tests (in-memory only; no network, S3, `input/`, or `output/`). The human runs them with `uv run pytest` from the repo root.
+`tests/` holds pytest tests (in-memory only; no network, S3, `input/`, or `output/`). The human runs them with `uv run pytest` from the repo root. GitHub Actions (`.github/workflows/tests.yml`) also runs them on Linux for pull requests into, and pushes to, `develop` and `main`; its job `tests` is the required status check in those branches' rulesets, so keep that job name, add no path filters, and keep the tests free of secrets and network access.
 
 Data directories (contents are **not** committed to git; the human creates them and populates them by running the scripts):
 
