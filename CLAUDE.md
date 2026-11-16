@@ -106,7 +106,7 @@ Put new engineering detail in the matching file under `docs/`, not in the README
 ## Environment and configuration
 
 - Python 3.13 (`requires-python = ">=3.13"`), pinned to 3.13.5 in `.python-version`, managed with `uv` (project-local `.venv`).
-- Dependencies: `pyproject.toml` (`dependencies` for production, `[dependency-groups] dev` for development), locked in `uv.lock`. Claude may edit `pyproject.toml`, but must not run `uv` or install anything, and must not hand-edit `uv.lock`. Tell the human which commands to run (`uv lock`, `uv sync`).
+- Dependencies: `pyproject.toml` (`dependencies` for production, `[dependency-groups] dev` for development), locked in `uv.lock`. Claude may edit `pyproject.toml`, but must not run `uv` or install anything, and must not hand-edit `uv.lock`. Tell the human which commands to run (`uv lock`, `uv sync`). Pin every dependency as `~=X.Y.Z` (three parts: major and minor fixed, patch updates allowed). Dependabot (`.github/dependabot.yml`) opens weekly update pull requests into `develop`, plus security updates (enabled in the repository settings); the human merges each one.
 - Never hard-code secrets, bucket names, or endpoints. Everything comes from `.env` via environment variables.
 
 `.env` variable names (names only; never values):
