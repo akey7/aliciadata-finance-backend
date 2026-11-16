@@ -138,13 +138,13 @@ Here are the keys the scripts need to function:
 
 1. `MASSIVE_API_KEY`: Key to Massive.com API for stock and index data. Obtain from API provider.
 
-2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region (e.g. `nyc3`), and endpoint of the DigitalOcean Space. These are boto3's standard names. The key needs read/write/delete permission on the Space. `AWS_ENDPOINT_URL_S3` must be the region-only endpoint (e.g. `https://nyc3.digitaloceanspaces.com`) without the Space name; the uploader refuses to run otherwise. Obtain the values from DigitalOcean.
+2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region, and endpoint of the Garage S3 server on the Hetzner VPS (see "Deployment" in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md#deployment)). These are boto3's standard names. The key needs read/write/delete permission on the bucket. `AWS_DEFAULT_REGION` must equal the region Garage is configured with (its `s3_region` setting), or Garage rejects the request signatures. `AWS_ENDPOINT_URL_S3` is the base URL of Garage's S3 API (for example `https://<s3-host>`), with no bucket name in its host and no path; the uploader refuses to run otherwise. Obtain the key from Garage (a key with access to the bucket) and the endpoint and region from the VPS's configuration.
 
-3. `S3_BUCKET_NAME`: Name of the one DigitalOcean Space (S3 bucket) that holds all frontend data.
+3. `S3_BUCKET_NAME`: Name of the one S3 bucket that holds all frontend data.
 
-4. `S3_PORTFOLIO_OPTIMIZATION_FOLDER` and `S3_TIME_SERIES_FOLDER`: names of the two top-level folders inside that Space, holding the portfolio optimization and ARIMA time series data. Dev and production share the Space and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
+4. `S3_PORTFOLIO_OPTIMIZATION_FOLDER` and `S3_TIME_SERIES_FOLDER`: names of the two top-level folders inside that bucket, holding the portfolio optimization and ARIMA time series data. Dev and production share the bucket and use different folder names. Files are uploaded to `<folder>/YYYY-MM-DD/<file>`; see `INTERFACE_CONTRACT.md` for the full key layout.
 
-Items 2 through 4 connect the backend to the front end. An upload run fails before any work starts if any of them is missing or empty. The scripts load `.env` with its values taking precedence over variables of the same name already set in the shell, so AWS credentials exported for other work are never sent to DigitalOcean. These names replaced the `FSF_FRONT_END_*` names (contract v45); the old names are no longer read.
+Items 2 through 4 connect the backend to the front end. An upload run fails before any work starts if any of them is missing or empty. The scripts load `.env` with its values taking precedence over variables of the same name already set in the shell, so AWS credentials exported for other work are never sent to the storage server. These names replaced the `FSF_FRONT_END_*` names (contract v45); the old names are no longer read.
 
 ## Execution
 

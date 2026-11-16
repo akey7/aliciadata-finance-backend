@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| **Contract version** | 49 |
+| **Contract version** | 50 |
 | **Last updated** | 2026-11-15 |
 | **Source of truth** | `aliciadata-finance-backend` (backend, formerly `fuzzy-system-research`). The copy in `aliciadata-finance-frontend` (formerly `fuzzy-system-finance`) is a mirror. |
 
-This file is stored **byte-for-byte identically** in both repos. It describes the files the backend uploads to one S3-compatible bucket (a DigitalOcean Space, accessed with `boto3`) and the frontend reads. Treat it as a public API.
+This file is stored **byte-for-byte identically** in both repos. It describes the files the backend uploads to one S3-compatible bucket (served by a self-hosted Garage server, accessed with `boto3`) and the frontend reads. Treat it as a public API.
 
 ## Rules for editing this file (humans and AI agents)
 
@@ -26,17 +26,17 @@ Version 1 was written from the backend code. Version 2 was checked against real 
 
 ## Where the data lives
 
-All data lives in **one DigitalOcean Space**, which is one S3 bucket. Inside it are **two top-level folders** (key prefixes), whose names are the values of two environment variables. Both the backend and the frontend use these variable names:
+All data lives in **one S3 bucket**, served by [Garage](https://garagehq.deuxfleurs.fr/), a self-hosted S3-compatible object store, on a VPS hosted by Hetzner. The frontend runs on the same VPS; the backend does not, and uploads over the network (see "Deployment" in the backend's `docs/SYSTEM_DESIGN.md`). Before v50 the bucket was a DigitalOcean Space. Inside the bucket are **two top-level folders** (key prefixes), whose names are the values of two environment variables. Both the backend and the frontend use these variable names:
 
 | Environment variable | Meaning |
 | --- | --- |
-| `S3_BUCKET_NAME` | Name of the Space (the S3 bucket) |
+| `S3_BUCKET_NAME` | Name of the S3 bucket |
 | `S3_PORTFOLIO_OPTIMIZATION_FOLDER` | Name of the top-level folder holding the optimization files |
 | `S3_TIME_SERIES_FOLDER` | Name of the top-level folder holding the ARIMA forecasts |
 
-**Dev and production share the one Space and differ only in the folder names.** Pointing a frontend or backend at dev or production means setting these two folder variables, so both sides must use the same pair of values for the same environment. Since contract v45 the three variables are named as in the table. Before v45 they were `FSF_FRONT_END_BUCKET_NAME`, `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`, and `FSF_FRONT_END_TIME_SERIES_FOLDER`, and before v13 the folder variables were `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`. The backend reads only the current names.
+**Dev and production share the one bucket and differ only in the folder names.** Pointing a frontend or backend at dev or production means setting these two folder variables, so both sides must use the same pair of values for the same environment. Since contract v45 the three variables are named as in the table. Before v45 they were `FSF_FRONT_END_BUCKET_NAME`, `FSF_FRONT_END_PORTFOLIO_OPTIMIZATION_FOLDER`, and `FSF_FRONT_END_TIME_SERIES_FOLDER`, and before v13 the folder variables were `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`. The backend reads only the current names.
 
-Every file is stored under a **date prefix** `YYYY-MM-DD/` inside its folder, one date folder per run, so past runs are kept. Full object keys within the Space, where `<X>` means the value of environment variable `X`:
+Every file is stored under a **date prefix** `YYYY-MM-DD/` inside its folder, one date folder per run, so past runs are kept. Full object keys within the bucket, where `<X>` means the value of environment variable `X`:
 
 ```
 <S3_PORTFOLIO_OPTIMIZATION_FOLDER>/YYYY-MM-DD/optimization_metadata.yml
@@ -47,14 +47,15 @@ Every file is stored under a **date prefix** `YYYY-MM-DD/` inside its folder, on
 <S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml   (since v21)
 ```
 
-Dev and production are selected by the configured Space and folder names; the key patterns are identical in both. In this document, **"folder"** means one of these two top-level folders, and **"date folder"** means a `YYYY-MM-DD/` prefix inside one.
+Dev and production are selected by the configured bucket and folder names; the key patterns are identical in both. In this document, **"folder"** means one of these two top-level folders, and **"date folder"** means a `YYYY-MM-DD/` prefix inside one.
 
 ### Connecting
 
-- **Endpoint:** use the **region-only** endpoint `https://<region>.digitaloceanspaces.com`, pass the **Space name as the S3 `Bucket`**, and pass the full key (starting with the folder name) as the S3 `Key` or `Prefix`.
-- **Space name variable:** both the backend and the frontend read the Space name from `S3_BUCKET_NAME`. The backend uploads with `Bucket=<space>` and `Key="<folder>/YYYY-MM-DD/<file>"`, and refuses to run with an endpoint that names the Space.
+- **Endpoint:** use the base URL of Garage's S3 API (for example `https://<s3-host>`), with **no bucket name in the host and no path**, pass the **bucket name as the S3 `Bucket`**, and pass the full key (starting with the folder name) as the S3 `Key` or `Prefix`.
+- **Bucket name variable:** both the backend and the frontend read the bucket name from `S3_BUCKET_NAME`. The backend uploads with `Bucket=<bucket>` and `Key="<folder>/YYYY-MM-DD/<file>"`, and refuses to run with an endpoint that names the bucket in its host or has a path.
+- **Region:** Garage checks the region in each request's signature against its own configured region (its `s3_region` setting), so each side's region setting must equal it.
 - **Credentials, region, and endpoint** are each side's own configuration, not part of this contract. Since v45 the backend uses boto3's standard names (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`); the frontend may use the same names for its own key, but is not required to.
-- **Avoid the Space-specific endpoint:** do **not** put the Space name in the endpoint host (`https://<space>.<region>.digitaloceanspaces.com`) and pass a folder name as `Bucket`. Uploads happen to land at the right key that way (boto3 sends path-style requests, so the "bucket" becomes the first key segment), but listings fail with `NoSuchKey`.
+- **Do not put the bucket or a folder in the endpoint:** never put the bucket name in the endpoint's host or path and then pass a folder name as `Bucket`. Under DigitalOcean (before v50) that made uploads land at the right key by accident but listings fail with `NoSuchKey`.
 
 ### The date prefix
 
@@ -76,7 +77,7 @@ A date is **available** only when its data is complete in **both** folders:
 
 Since v10, one backend run computes everything first and then uploads its files in the order `all_forecasts.csv`, `all_forecasts_metadata.yml` (since v21), `portfolio_optimization_plot_data.h5`, `portfolio_backtest_daily.csv` and `portfolio_backtest_metadata.yml` (since v36), `optimization_metadata.yml`; if any computation fails, nothing is uploaded. Because `optimization_metadata.yml` is last, its presence (for v21+ runs) also means the forecasts metadata is complete, and for v36+ runs that both backtest files are. `all_forecasts_metadata.yml` and the backtest files are not part of the availability rule, since older dates do not have them. Readers must still check both folders, because dates written before v10 came from two separate scripts. Dates present in only one folder (for example, only one of the two pre-v10 scripts was run) are **not** available and must not be offered to users.
 
-**To find the dates,** list each folder with S3 `ListObjectsV2` using `Bucket=<space>` and `Prefix="<folder>/"`:
+**To find the dates,** list each folder with S3 `ListObjectsV2` using `Bucket=<bucket>` and `Prefix="<folder>/"`:
 
 - Follow `ContinuationToken` pagination, since a listing returns at most 1,000 entries.
 - Strip the `<folder>/` prefix from each returned key, then match the date pattern above.
@@ -734,7 +735,7 @@ units:
 
 Checked against real backend output (2026-10-11), unless dated otherwise:
 
-- Storage layout (2026-10-12):
+- Storage layout (2026-10-12), checked on the DigitalOcean Space used before v50. The key layout is unchanged on Garage, but these listings have not been repeated there:
   - **Console (the human):** the account has exactly one Space (bucket), whose name is the value of `S3_BUCKET_NAME`, in region `nyc3`.
   - **Programmatic listing** with the recommended configuration (endpoint `https://nyc3.digitaloceanspaces.com`, `ListObjectsV2(Bucket=<space>, Prefix="<folder>/")`) returned exactly these keys:
     - `time-series/2026-10-09/all_forecasts.csv`
@@ -789,6 +790,7 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 50 | 2026-11-15 | Hosting change; no change to files, keys, folder names, columns, types, units, values, the upload order, or the environment variable names. The bucket moved from a DigitalOcean Space to a self-hosted Garage S3 server on a Hetzner VPS, which also hosts the frontend. "Where the data lives" now says "bucket" instead of "Space", and "Connecting" gives the endpoint rule generally (the S3 API's base URL, with no bucket name in the host and no path) and notes that the region must equal Garage's configured region. "Verification status" now says the storage-layout listings were made on DigitalOcean. Frontend: point its endpoint, region, and key at Garage (each side's own configuration, not part of this contract); no code change is required by the contract; replace its copy with this file. |
 | 49 | 2026-11-15 | Documentation only; no change to files, keys, columns, types, units, values, or the upload order. "Verification status" listed the upload order without the two backtest files (added in v36); it now lists all six files in the order given in "Which dates are available". Frontend: no change required; replace its copy with this file. |
 | 48 | 2026-11-14 | **Additive.** Each of the three metadata files (`optimization_metadata.yml`, `portfolio_backtest_metadata.yml`, and `all_forecasts_metadata.yml`) gains two top-level keys: `computed_at` (string, UTC, `YYYY-MM-DDTHH:MM:SSZ`), when the run that wrote the date folder started, the same in all three; and `contract_version` (int), the version of this contract the folder was written under. No existing key, column, file, value, unit, or upload order changes. They make a date folder computed after its date (v47) recognizable. The backend can now also backfill many past dates in one command, writing each date as in v47. Frontend: no change required; treat both keys as optional, since older files lack them; optionally show when a date was computed. |
 | 47 | 2026-11-14 | Behavior change in which date folders the backend writes; no change to files, keys, columns, types, units, values, or the upload order. The backend can now be run for a past NYSE session (an as-of mode): it uses only prices up to that date, as if the data ended then, and writes (and uploads) that date's folder, replacing any files already in it. A run still writes only its own date folder and never deletes any. "The date prefix" replaces the sentence "Older dates are never modified or deleted by the backend" with "Re-runs and past dates": a date folder can be computed after its date, with the then-current method, settings, and adjusted prices, and can be rewritten. Frontend: no change required; do not assume a date folder was computed on its date or never changes, and keep listing dates on every load, since past dates can be added. |

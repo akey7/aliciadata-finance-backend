@@ -1,14 +1,14 @@
 """
 Where each run's results live: locally under output/ and remotely in the one
-frontend Space (S3 bucket). Both layouts share one date folder per run,
+frontend S3 bucket. Both layouts share one date folder per run,
 named by the data as-of date (the last NYSE trading day in the run's price
 data):
 
     output/<kind>/YYYY-MM-DD/<filename>       (local)
-    <folder>/YYYY-MM-DD/<filename>            (object key in the Space)
+    <folder>/YYYY-MM-DD/<filename>            (object key in the bucket)
 
 where <kind> is "portfolio_optimization" or "time_series", and <folder> is
-the top-level folder in the Space for that kind (the value of
+the top-level folder in the bucket for that kind (the value of
 S3_PORTFOLIO_OPTIMIZATION_FOLDER or S3_TIME_SERIES_FOLDER). The local path
 minus its "output/<kind>/" part equals the object key minus its "<folder>/"
 part, so the two layouts cannot drift apart. All functions here are pure
@@ -41,7 +41,7 @@ PORTFOLIO_BACKTEST_METADATA_FILENAME = "portfolio_backtest_metadata.yml"
 # The version of docs/INTERFACE_CONTRACT.md that the uploaded files follow,
 # written to every metadata file as contract_version. A test checks that it
 # equals the version in that file, so bump both together.
-CONTRACT_VERSION = 49
+CONTRACT_VERSION = 50
 
 BACKFILL = "backfill"
 
@@ -100,7 +100,7 @@ def as_of_date_str(index: pd.DatetimeIndex) -> str:
 def bucket_key(as_of: str, filename: str) -> str:
     """
     Return the key of a run's file relative to its top-level folder in the
-    Space. Use object_key() for the full object key.
+    bucket. Use object_key() for the full object key.
 
     Parameters
     ----------
@@ -122,13 +122,13 @@ def bucket_key(as_of: str, filename: str) -> str:
 
 def object_key(folder: str, as_of: str, filename: str) -> str:
     """
-    Return the full object key of a run's file in the frontend Space, as
+    Return the full object key of a run's file in the frontend bucket, as
     specified in docs/INTERFACE_CONTRACT.md.
 
     Parameters
     ----------
     folder : str
-        Top-level folder in the Space, i.e. the value of
+        Top-level folder in the bucket, i.e. the value of
         S3_PORTFOLIO_OPTIMIZATION_FOLDER or S3_TIME_SERIES_FOLDER.
 
     as_of : str
