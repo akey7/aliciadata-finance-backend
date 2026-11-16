@@ -123,14 +123,18 @@ GitHub Actions also runs the tests on Linux for every pull request into `develop
 ### Managing dependencies
 
 ```
-uv add <package>           # add a production dependency
-uv add --dev <package>     # add a development dependency
-uv remove <package>        # remove a dependency
-uv lock --upgrade          # upgrade all packages within the declared constraints
-uv sync                    # bring .venv in line with uv.lock
+uv add "<package>~=X.Y.Z"        # add a production dependency, pinned (see below)
+uv add --dev "<package>~=X.Y.Z"  # add a development dependency, pinned
+uv remove <package>              # remove a dependency
+uv lock --upgrade                # upgrade all packages within the declared constraints
+uv sync                          # bring .venv in line with uv.lock
 ```
 
+Every dependency in `pyproject.toml` is pinned to a major and minor version, with patch updates allowed: `~=X.Y.Z` means at least `X.Y.Z` and below `X.(Y+1)`. Always write three parts, because `~=X.Y` allows every minor version below `X+1`. A plain `uv add <package>` writes a `>=` constraint instead, so give the pin explicitly. `uv.lock` pins the exact version of every package, including indirect ones, so `uv lock --upgrade` applies only patch updates of the pinned packages.
+
 Commit both `pyproject.toml` and `uv.lock` whenever dependencies change.
+
+Dependabot (`.github/dependabot.yml`) checks for updates weekly and opens pull requests into `develop`. Minor and patch updates arrive together in one pull request; a minor update also raises its pin in `pyproject.toml`. Each major update arrives in a pull request of its own. Updates to the GitHub Actions in `.github/workflows/` arrive the same way. Security updates, switched on in the repository settings, open a pull request as soon as a vulnerability is reported. Every pull request runs the tests, and each is merged by hand. Before merging a major update, read its changelog: the tests cannot show that results such as forecasts or optimal weights are numerically unchanged.
 
 ### `.env` file
 

@@ -4,38 +4,31 @@ version = "0.1.0"
 description = "Backend for aliciadata-finance-frontend: ARIMA stock price models and portfolio optimization, uploaded to an S3-compatible bucket."
 readme = "README.md"
 requires-python = ">=3.13"
+# Each dependency is pinned to a major and minor version with patch updates
+# allowed: "~=X.Y.Z" means >= X.Y.Z and < X.(Y+1). Always write three parts,
+# because "~=X.Y" would allow every minor version below X+1. uv.lock pins the
+# exact versions; Dependabot raises these limits in its pull requests.
 dependencies = [
-    "boto3",
-    "exchange-calendars",
-    "h5py",
-    "ipywidgets",
-    "jupyterlab",
-    "massive",
-    "matplotlib",
-    "notebook",
-    "numpy",
-    "openpyxl",
-    "pandas",
-    "pandas-datareader",
-    "plotly",
-    "python-dateutil",
-    "python-dotenv",
-    "pyyaml",
-    "requests",
-    "scikit-learn",
-    "scipy",
-    "seaborn",
-    "statsmodels",
-    "tables",
-    "tqdm",
+    "boto3~=1.44.3",
+    "botocore~=1.44.3",  # Imported directly (errors, client config).
+    "exchange-calendars~=4.13.3",
+    "h5py~=3.16.0",
+    "massive~=2.10.0",
+    "numpy~=2.5.4",
+    "pandas~=3.1.1",
+    "pandas-datareader~=0.11.1",
+    "python-dotenv~=1.2.4",
+    "pyyaml~=6.0.3",
+    "scipy~=1.18.1",
+    "statsmodels~=0.15.0",
+    "tqdm~=4.70.1",
 ]
 
 [dependency-groups]
 dev = [
-    "black[jupyter]",
-    "flake8",
-    "pytest",
-    "sphinx",
+    "black~=26.10.1",
+    "flake8~=7.5.0",
+    "pytest~=9.2.0",
 ]
 
 [tool.pytest.ini_options]
