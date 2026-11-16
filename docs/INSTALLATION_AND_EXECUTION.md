@@ -118,6 +118,8 @@ uv run pytest
 
 Run other development tools the same way, for example `uv run black .`.
 
+GitHub Actions also runs the tests on Linux for every pull request into `develop` or `main`, and on every push to them (`.github/workflows/tests.yml`). Its `tests` check must pass before a pull request into either branch can merge.
+
 ### Managing dependencies
 
 ```
