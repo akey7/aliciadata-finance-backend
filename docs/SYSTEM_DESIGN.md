@@ -21,8 +21,6 @@ Also of interest to an engineering audience is the [INTERFACE_CONTRACT.md](INTER
 - The frontend runs on the same VPS as the storage it reads. Its deployment is documented in the frontend repository.
 - For a proof-of-concept project, hosting everything the frontend needs on one VPS keeps deployment simple and hosting costs low and predictable.
 
-Before contract v50 the results were stored in a DigitalOcean Space. The backend talks to storage only through the S3 API, so the move changed configuration (the endpoint, region, and keys in `.env`), not code.
-
 ## How the backend works
 
 One run of `scripts/run_optimization_and_time_series.py` downloads prices, then follows two paths, the time series forecasts and the portfolio optimization with its backtest, and finally uploads their results. The first diagram shows which module owns each part of a run; the second shows which files each step reads and writes, and the functions that write them.
