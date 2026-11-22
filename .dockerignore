@@ -1,0 +1,13 @@
+# Keep secrets, local data, and development files out of the image build.
+.env
+.env.*
+input/
+output/
+.venv/
+.git/
+.github/
+.claude/
+__pycache__/
+*.pyc
+.pytest_cache/
+docs/
