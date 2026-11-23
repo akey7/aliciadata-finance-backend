@@ -18,7 +18,8 @@ Order of operations:
    the run is the one that data ending that day would give; the as-of date
    names the date folder and the download also covers the sessions after it.
 2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
-   cached as output/time_series/<as-of date>/all_forecasts.csv. Metrics on
+   cached as output/time_series/<as-of date>/all_forecasts.csv (a cached CSV
+   whose rows do not match the data and settings is retrained). Metrics on
    those forecasts are written next to it as all_forecasts_metadata.yml.
 3. Optimization: on the last PortfolioBacktestConfig.training_window_closes
    sessions, with the last DTB3 rate dated before the as-of date, written to
@@ -321,7 +322,10 @@ def run_pipeline(
 
     retrain_arima : bool, optional
         If True, retrain ARIMA models even if the as-of date's forecasts CSV
-        already exists, and overwrite it.
+        already exists, and overwrite it. Even when False, a cached CSV that
+        does not match the data and settings (see
+        ticker_predict.cached_forecasts_match()) is retrained; a change in the
+        training window length alone is not detected and needs this flag.
 
     refresh_data : bool, optional
         If True, download prices again even if today's download is cached.
@@ -458,6 +462,7 @@ def run_pipeline(
         forecasts_path,
         retrain=retrain_arima,
         trainer=trainer,
+        training_window_returns=ts_config.training_window_returns,
     )
 
     # 2b. Forecast metrics, from the CSV exactly as written (also for cached

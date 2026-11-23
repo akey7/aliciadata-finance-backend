@@ -33,7 +33,7 @@ Options:
 | Flag | Effect |
 | --- | --- |
 | `--no-upload` | Write the `output/` files but upload nothing. Use this to check a run without touching any bucket. |
-| `--retrain-arima` | Retrain the ARIMA models even if forecasts for the as-of date are cached. |
+| `--retrain-arima` | Retrain the ARIMA models even if forecasts for the as-of date are cached. Without it, cached forecasts whose rows do not match the data and settings (for example after `time_series_models.evaluation_window_length` changes) are retrained anyway; a change to `training_window_length` alone is not detected and needs this flag. |
 | `--refresh-data` | Download prices again even if today's download is cached. |
 | `--workers N` | Number of worker processes for ARIMA training. Defaults to half the logical CPUs (for example 8 on a 16-thread Intel CPU, 5 on a 10-core M4). `--workers 1` trains everything in one process. The forecasts do not depend on this setting. |
 | `--config PATH` | Model settings file to use instead of `config/modeling_and_optimization.yml` (see below). |
@@ -55,13 +55,13 @@ What it does:
 
 1. **One download.** Prices are downloaded once, long enough for the oldest date (that date's history plus one session per later date), or read from today's cached download if it is long enough. Before any date runs, the backfill checks that every ticker has a close on every NYSE session the runs need, and stops with the first ticker and date that is missing if not. The risk-free rate history is then fetched once, back to before the oldest date's first rebalance. Both caches in `input/` are named by the day the backfill started, and every date reads them, even if the backfill runs past midnight, so nothing is downloaded again.
 2. **One run per date, oldest first.** Each date is a full run of this script with `--as-of` that date, in its own process: it uses only prices up to that date, writes that date's folders in `output/`, and uploads them before the next date starts. `--no-upload`, `--retrain-arima`, `--workers`, and `--config` apply to every date; `--refresh-data` applies to the one download.
-3. **Skipping complete dates.** A date that is already complete is skipped, unless `--force` is given. When uploading, "complete" means available in the bucket's configured folders (its `optimization_metadata.yml` and `all_forecasts.csv` exist), so a backfill to dev does not make production skip any date. With `--no-upload`, it means the same two files exist in `output/`. A skipped or recomputed date reuses its cached ARIMA forecasts unless `--retrain-arima` is given. An interrupted backfill can therefore be resumed by running the same command again.
+3. **Skipping complete dates.** A date that is already complete is skipped, unless `--force` is given. When uploading, "complete" means available in the bucket's configured folders (its `optimization_metadata.yml` and `all_forecasts.csv` exist), so a backfill to dev does not make production skip any date. With `--no-upload`, it means the same two files exist in `output/`. A recomputed date reuses its cached ARIMA forecasts if they still match the data and settings, unless `--retrain-arima` is given. An interrupted backfill can therefore be resumed by running the same command again.
 4. **Failures.** A date that fails does not stop the others. At the end the backfill lists the failed dates, and the script exits with status 1 if any failed.
 5. **Per-date log.** Each date's status, run time, and peak memory (in MiB, as in "Peak memory" below) are appended to `output/backfill/backfill_<UTC start time>.csv` as it finishes, so even an interrupted backfill leaves its table. Each date runs in its own process because the peak memory counters cannot be reset within one process.
 
 Backfilled dates are computed with today's method, settings, and adjusted prices, which can differ from what was available on the date itself (for example after a later split). Their metadata files record when they were computed (`computed_at`) and the contract version (`contract_version`); see `INTERFACE_CONTRACT.md`, "Re-runs and past dates".
 
-Expect roughly one normal run's time per date, about 20 to 40 minutes for 60 dates on the M4 Pro machines. Try a backfill against the dev folders first.
+Expect roughly one normal run's time per date. About 20 to 40 minutes for 60 dates on the M4 Pro machines was measured before the forecasts' scored days grew about fourfold (contract v52); the ARIMA work grows in proportion, so expect that part of each run to take about four times as long. Try a backfill against the dev folders first.
 
 #### Peak memory
 
@@ -98,7 +98,7 @@ portfolio_backtest:
 ```
 
 - `training_window_length` counts **closing prices**; each window has one fewer daily log return than closes.
-- `time_series_models.evaluation_window_length` is the number of scored forecast days in `all_forecasts.csv` (plus the live forecast) and in the metrics of `all_forecasts_metadata.yml`.
+- `time_series_models.evaluation_window_length` is the number of scored forecast days in `all_forecasts.csv` (plus the live forecast) and in the metrics of `all_forecasts_metadata.yml`. Each scored day needs one ARIMA fit per ticker and candidate order, so the ARIMA run time grows in proportion to it plus one. After changing it, cached forecasts are retrained automatically, because their rows no longer match; after changing `training_window_length`, run with `--retrain-arima`.
 - `portfolio_backtest.evaluation_window_length` is the number of days the portfolio backtest scores. The two `evaluation_window_length` settings are independent: both evaluations end on the as-of date, but they can start on different dates.
 - Every key is required, and unknown keys are rejected, so a typo stops the run before any download instead of silently using a default.
 - The run downloads enough history for the ARIMA windows plus their scored days and for the backtest's training window plus its scored days, whichever is longer, with a small margin. Lengthening either evaluation lengthens the download, so the price data source must provide that much history for every ticker, including the most recently listed one.
