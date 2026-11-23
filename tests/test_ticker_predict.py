@@ -242,13 +242,123 @@ def test_order_columns_round_trip_through_csv_as_integers(tmp_path):
     # The uploaded CSV is written by load_or_train_forecasts().
     path = str(tmp_path / "all_forecasts.csv")
     ticker_predict.load_or_train_forecasts(
-        nyse_prices("2026-04-02"), path, trainer=ShortWindowWalkForward()
+        nyse_prices("2026-04-02"),
+        path,
+        trainer=ShortWindowWalkForward(),
+        training_window_returns=SHORT_WINDOW_RETURNS,
     )
     loaded = pd.read_csv(path, index_col="pred_date", parse_dates=True)
     assert pd.api.types.is_integer_dtype(loaded["AAA_arima_p"])
     assert pd.api.types.is_integer_dtype(loaded["BBB_arima_q"])
     # Forecast columns are still found by the "_arima" suffix alone.
     assert [c for c in loaded.columns if c.endswith("_arima")] == ["AAA_arima", "BBB_arima"]
+
+
+# The forecasts cache: cached_forecasts_match() and load_or_train_forecasts()
+
+
+class CountingWalkForward(ShortWindowWalkForward):
+    """ShortWindowWalkForward that counts its train_arima_models() calls."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def train_arima_models(self, df, **kwargs):
+        self.calls += 1
+        return super().train_arima_models(df, **kwargs)
+
+
+def read_forecasts(path) -> pd.DataFrame:
+    return pd.read_csv(path, index_col="pred_date", parse_dates=True)
+
+
+def test_fresh_forecasts_match_their_own_prices(tmp_path):
+    prices = nyse_prices("2026-04-02")
+    forecasts = ShortWindowWalkForward().train_arima_models(prices)
+    assert ticker_predict.cached_forecasts_match(forecasts, prices, SHORT_WINDOW_RETURNS)
+    # Also after the round trip through the CSV, as the cache is read.
+    path = tmp_path / "all_forecasts.csv"
+    forecasts.to_csv(path, index=True)
+    assert ticker_predict.cached_forecasts_match(
+        read_forecasts(path), prices, SHORT_WINDOW_RETURNS
+    )
+
+
+def test_forecasts_match_with_a_whole_session_missing():
+    prices = nyse_prices("2026-04-02").drop(index=pd.Timestamp("2026-03-10 17:00"))
+    forecasts = ShortWindowWalkForward().train_arima_models(prices)
+    assert ticker_predict.cached_forecasts_match(forecasts, prices, SHORT_WINDOW_RETURNS)
+
+
+@pytest.mark.parametrize("cached_sessions", [30, 50])
+def test_forecasts_with_other_scored_days_do_not_match(cached_sessions):
+    # Same last session, fewer or more scored days than the current window.
+    cached = ShortWindowWalkForward().train_arima_models(
+        nyse_prices("2026-04-02", n_sessions=cached_sessions)
+    )
+    prices = nyse_prices("2026-04-02")
+    assert not ticker_predict.cached_forecasts_match(cached, prices, SHORT_WINDOW_RETURNS)
+
+
+def test_forecasts_for_other_dates_do_not_match():
+    # Same number of rows, but the data ends on a later session.
+    cached = ShortWindowWalkForward().train_arima_models(nyse_prices("2026-04-02"))
+    prices = nyse_prices("2026-04-09")
+    assert not ticker_predict.cached_forecasts_match(cached, prices, SHORT_WINDOW_RETURNS)
+
+
+def test_forecasts_missing_a_ticker_do_not_match():
+    prices = nyse_prices("2026-04-02")
+    cached = ShortWindowWalkForward().train_arima_models(prices[["AAA"]])
+    assert not ticker_predict.cached_forecasts_match(cached, prices, SHORT_WINDOW_RETURNS)
+
+
+def test_matching_cache_is_reused(tmp_path):
+    path = str(tmp_path / "all_forecasts.csv")
+    prices = nyse_prices("2026-04-02")
+    trainer = CountingWalkForward()
+    kwargs = dict(trainer=trainer, training_window_returns=SHORT_WINDOW_RETURNS)
+    assert ticker_predict.load_or_train_forecasts(prices, path, **kwargs) is True
+    with open(path) as f:
+        written = f.read()
+    assert ticker_predict.load_or_train_forecasts(prices, path, **kwargs) is False
+    assert trainer.calls == 1
+    with open(path) as f:
+        assert f.read() == written
+
+
+def test_cache_with_other_scored_days_is_retrained(tmp_path):
+    path = str(tmp_path / "all_forecasts.csv")
+    trainer = CountingWalkForward()
+    kwargs = dict(trainer=trainer, training_window_returns=SHORT_WINDOW_RETURNS)
+    ticker_predict.load_or_train_forecasts(
+        nyse_prices("2026-04-02", n_sessions=30), path, **kwargs
+    )
+    prices = nyse_prices("2026-04-02")
+    assert ticker_predict.load_or_train_forecasts(prices, path, **kwargs) is True
+    assert trainer.calls == 2
+    assert len(read_forecasts(path)) == len(prices) - SHORT_WINDOW_RETURNS
+
+
+def test_unreadable_cache_is_retrained(tmp_path):
+    path = tmp_path / "all_forecasts.csv"
+    path.write_text("not a forecasts table\n")
+    trainer = CountingWalkForward()
+    prices = nyse_prices("2026-04-02")
+    assert (
+        ticker_predict.load_or_train_forecasts(
+            prices,
+            str(path),
+            trainer=trainer,
+            training_window_returns=SHORT_WINDOW_RETURNS,
+        )
+        is True
+    )
+    assert trainer.calls == 1
+    assert ticker_predict.cached_forecasts_match(
+        read_forecasts(path), prices, SHORT_WINDOW_RETURNS
+    )
 
 
 # ArimaModels.select_order (pure; no model fitting)

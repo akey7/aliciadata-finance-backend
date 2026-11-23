@@ -402,6 +402,25 @@ def test_cached_forecasts_skip_training(upload_env, deps):
     assert len(uploader.calls) == 12  # The cached file is still uploaded.
 
 
+def test_cached_forecasts_with_other_scored_days_are_retrained(upload_env, deps):
+    # Cached forecasts from 20 scored days must not be reused once 25 are
+    # configured, or the metadata would claim 25 while scoring only 20.
+    _, trainer, _, kwargs = deps
+    first = run_pipeline(**kwargs)
+    trainer.calls.clear()
+    longer = TimeSeriesConfig(training_window_length=252, evaluation_window_length=25)
+    second = run_pipeline(**{**kwargs, "ts_config": longer})
+    assert second.forecasts_path == first.forecasts_path  # Same date folder.
+    assert len(trainer.calls) == 1
+    assert second.trained_arima is True
+    forecasts = pd.read_csv(second.forecasts_path, index_col="pred_date")
+    assert len(forecasts) == 25 + 1
+    meta = load_forecasts_metadata(second)
+    assert meta["evaluation_window"]["target_trading_days"] == 25
+    for metrics in meta["ticker_metrics"].values():
+        assert metrics["n_evaluated"] == 25
+
+
 def test_retrain_arima_ignores_cache(upload_env, deps):
     _, trainer, _, kwargs = deps
     first = run_pipeline(**kwargs)
