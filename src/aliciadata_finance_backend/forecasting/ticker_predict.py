@@ -370,19 +370,84 @@ class ForecastTrainer(Protocol):
     def train_arima_models(self, df: pd.DataFrame) -> pd.DataFrame: ...
 
 
+def cached_forecasts_match(
+    forecasts_df: pd.DataFrame,
+    window_df: pd.DataFrame,
+    training_window_returns: int,
+) -> bool:
+    """
+    Whether a cached forecasts table has the shape that training on window_df
+    would give, so it can be reused. Pure: compares dates and columns only,
+    never forecast values.
+
+    Training gives one row per window end, window_df.index[r:] with
+    r = training_window_returns, each dated the next NYSE session after its
+    window end. So a matching table has:
+
+    - exactly len(window_df) - r rows, which catches a change in the number
+      of scored days (TimeSeriesConfig.evaluation_window_length);
+    - a first pred_date after the first window end, window_df.index[r], and
+      no later than the next date in window_df (the next session is at most
+      the next date present);
+    - a last pred_date, the live forecast, after the last close in window_df;
+    - a T_arima column for every ticker in window_df.
+
+    Dates are compared without their time of day. A change in the training
+    window length alone cannot be detected this way, because the scored days
+    and so the rows stay the same; it still needs --retrain-arima.
+
+    Parameters
+    ----------
+    forecasts_df : pd.DataFrame
+        The cached table, indexed by pred_date (as read from the CSV).
+
+    window_df : pd.DataFrame
+        Wide adjusted close prices the run would train on.
+
+    training_window_returns : int
+        Daily log returns in each training window
+        (TimeSeriesConfig.training_window_returns).
+
+    Returns
+    -------
+    bool
+        True if the table matches, False otherwise.
+    """
+    r = training_window_returns
+    n_windows = len(window_df) - r
+    if n_windows < 1 or len(forecasts_df) != n_windows:
+        return False
+    if not isinstance(forecasts_df.index, pd.DatetimeIndex):
+        return False
+    pred_dates = forecasts_df.index.normalize()
+    data_dates = pd.DatetimeIndex(window_df.index).normalize()
+    if not pred_dates[0] > data_dates[r]:
+        return False
+    if r + 1 < len(data_dates) and not pred_dates[0] <= data_dates[r + 1]:
+        return False
+    if not pred_dates[-1] > data_dates[-1]:
+        return False
+    return all(f"{ticker}_arima" in forecasts_df.columns for ticker in window_df.columns)
+
+
 def load_or_train_forecasts(
     window_df: pd.DataFrame,
     path: str,
     retrain: bool = False,
     *,
     trainer: ForecastTrainer,
+    training_window_returns: int,
 ) -> bool:
     """
     Make sure the forecasts CSV for a run exists at path, training ARIMA
-    models only when needed. The CSV at path is the cache: if it exists and
-    retrain is False, nothing is trained and the file is left as is.
-    Otherwise the models are trained on window_df and the CSV is (over)written
-    in the format of all_forecasts.csv in docs/INTERFACE_CONTRACT.md.
+    models only when needed. The CSV at path is the cache: if it exists,
+    retrain is False, and it matches window_df (cached_forecasts_match()),
+    nothing is trained and the file is left as is. Otherwise the models are
+    trained on window_df and the CSV is (over)written in the format of
+    all_forecasts.csv in docs/INTERFACE_CONTRACT.md. A cached CSV that does
+    not match, for example one written with a different number of scored
+    days, or that cannot be read, is retrained instead of reused, with a
+    message saying so.
 
     Parameters
     ----------
@@ -401,6 +466,10 @@ def load_or_train_forecasts(
         Object that trains the models, e.g. an ArimaWalkForward built with
         the configured training window.
 
+    training_window_returns : int
+        Daily log returns in each training window
+        (TimeSeriesConfig.training_window_returns), used to check the cache.
+
     Returns
     -------
     bool
@@ -408,8 +477,18 @@ def load_or_train_forecasts(
         CSV was reused.
     """
     if os.path.exists(path) and not retrain:
-        print(f"Using cached forecasts {path}")
-        return False
+        try:
+            cached = pd.read_csv(path, index_col="pred_date", parse_dates=True)
+            matches = cached_forecasts_match(cached, window_df, training_window_returns)
+        except (ValueError, KeyError, pd.errors.ParserError):
+            matches = False
+        if matches:
+            print(f"Using cached forecasts {path}")
+            return False
+        print(
+            f"Cached forecasts {path} do not match the current data and "
+            "settings; retraining."
+        )
     forecasts_df = trainer.train_arima_models(window_df)
     forecasts_df.to_csv(ensure_parent_dir(path), index=True)
     print(f"Saved {path}")

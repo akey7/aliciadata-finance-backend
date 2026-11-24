@@ -1,5 +1,6 @@
 from datetime import datetime
 from functools import lru_cache
+import warnings
 import exchange_calendars as xcals
 import pandas as pd
 from pandas.tseries.offsets import CustomBusinessDay
@@ -21,12 +22,23 @@ def nyse_holidays() -> pd.DatetimeIndex:
     (half) days are trading sessions and are not included. The result is
     cached because building the calendar is relatively slow.
 
+    Building the calendar hides one pandas deprecation warning raised inside
+    exchange_calendars (it calls Series.values on tz-aware UTC columns, which
+    pandas 3.1 deprecates). The values it gets are unaffected, and no other
+    warning is hidden. Remove the filter once a release of exchange_calendars
+    no longer triggers it.
+
     Returns
     -------
     pd.DatetimeIndex
         Tz-naive, midnight-normalized dates of NYSE weekday closures.
     """
-    cal = xcals.get_calendar(NYSE_CALENDAR_CODE)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Series\.values returning an ndarray that drops timezone",
+        )
+        cal = xcals.get_calendar(NYSE_CALENDAR_CODE)
     weekdays = pd.bdate_range(cal.first_session, cal.last_session)
     return weekdays.difference(cal.sessions)
 

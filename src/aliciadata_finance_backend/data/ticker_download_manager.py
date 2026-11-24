@@ -53,7 +53,7 @@ class TickerDownloadManager:
         else:
             self.tickers = tickers
 
-    def download_tickers(self, tickers, date_from, date_to, delay=5):
+    def download_tickers(self, tickers, date_from, date_to, delay=0):
         """
         Gets ticker data from Massive.com between the given dates, inclusive
         of the ending date.
@@ -71,7 +71,7 @@ class TickerDownloadManager:
 
         delay: int, optional
             Seconds to wait between successive API calls for the tickers.
-            If not specifed defaults to 5 seconds.
+            If not specifed defaults to no delay.
 
         Returns
         -------
@@ -101,8 +101,11 @@ class TickerDownloadManager:
                         "transactions": a.transactions,
                     }
                 )
-            print(f"{ticker}. Acquired {len(rows)} so far. Sleeping {delay} seconds...")
-            time.sleep(delay)
+            if delay > 0:
+                print(f"{ticker}. Acquired {len(rows)} so far. Sleeping {delay} seconds...")
+                time.sleep(delay)
+            else:
+                print(f"{ticker}. Acquired {len(rows)} so far.")
         df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms").dt.tz_localize(None)
         df["datetime"] = df["datetime"].apply(
