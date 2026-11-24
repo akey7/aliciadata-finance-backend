@@ -7,19 +7,23 @@ Also of interest to an engineering audience is the [INTERFACE_CONTRACT.md](INTER
 ## Deployment
 
 ```text
- [Mac mini, run by hand]                    [Hetzner VPS]
-   this backend          ── S3 uploads ──►    Caddy (reverse proxy)
-                                              Garage (S3-compatible storage)
-                                              frontend Gradio app
-                                              (each in a Docker container,
-                                               built and installed with Ansible)
+ [backend VPS, Hetzner]                       [frontend VPS, Hetzner]
+   cron, after each trading day's close         Caddy (reverse proxy)
+     └─ backend container    ── S3 uploads ──►  Garage (S3-compatible storage)
+        (this repository's                        ▲ reads
+         Dockerfile)                            frontend Gradio app
+
+ Every container on both VPSs is built and installed with Ansible.
 ```
 
-- The results are stored in a self-hosted, S3-compatible object store, [Garage](https://garagehq.deuxfleurs.fr/), on a virtual private server (VPS) hosted by Hetzner.
-- Three services run on that VPS, each in its own Docker container: Garage, the frontend Gradio app, and a Caddy reverse proxy. The containers are built and installed onto the VPS with Ansible.
-- **This backend is not hosted on the VPS.** It runs by hand on a local machine (see [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md)) and uploads its results to Garage over the network through Garage's S3 API, as for any S3 service.
-- The frontend runs on the same VPS as the storage it reads. Its deployment is documented in the frontend repository.
-- For a proof-of-concept project, hosting everything the frontend needs on one VPS keeps deployment simple and hosting costs low and predictable.
+- The results are stored in a self-hosted, S3-compatible object store, [Garage](https://garagehq.deuxfleurs.fr/), on a virtual private server (VPS) hosted by Hetzner. Three services run on that VPS, each in its own Docker container: Garage, the frontend Gradio app, and a Caddy reverse proxy. The frontend's deployment is documented in the frontend repository.
+- **This backend runs on a separate Hetzner VPS**, in a Docker container built from the `Dockerfile` at the root of this repository (see "Running in Docker" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#running-in-docker)). Like the frontend's containers, it is built and installed onto its VPS with Ansible.
+- **cron runs it unattended**, once per trading day after the market closes, for the most recent trading day: the container's default command, the normal run, which uploads that day's results. Past dates are filled in only by running `--past-days` by hand (see "Backfilling past dates" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#backfilling-past-dates)).
+- The backend reaches Garage over the network, through Garage's S3 API, as for any S3 service, and needs network access to Massive.com and FRED for its data. For development, it can also be run directly on a local machine with `uv`.
+- Keeping the backend on its own VPS separates the daily computation, which can use several processes and a few hundred MiB per process (see "Peak memory" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#peak-memory)), from the services the dashboard's users reach. For a proof-of-concept project, two small VPSs keep deployment simple and hosting costs low and predictable.
+- **Because the run is unattended, a change reaches the production bucket on the first scheduled run after the image with that change is installed**, without anyone watching it. Check changes against the dev folders first.
+
+**The image.** The `Dockerfile` builds on the official Python image, pinned to the patch version in `.python-version`, and adds `uv` at a pinned version. It installs the production dependencies exactly as locked in `uv.lock` (`uv sync --locked --no-dev`), first on their own so that layer is reused until they change, then the project itself. The container runs as an unprivileged user, and its default command is the normal daily run, `uv run --locked --no-dev python ./scripts/run_optimization_and_time_series.py`. Before running, `uv run` checks the environment against `uv.lock` with the same options, so the container always uses the configured production dependencies, installing anything missing from the network rather than running without it. `.dockerignore` keeps `.env`, `input/`, `output/`, and development files out of the image, so settings and secrets are passed to the container at run time.
 
 ## How the backend works
 
@@ -114,6 +118,8 @@ The repository separates code that you **run** from code that you **import**:
 
 ```
 aliciadata-finance-backend/
+├── Dockerfile                    # Image that runs the backend on the VPS
+├── .dockerignore                 # Keeps .env, input/, output/, and dev files out of the image
 ├── pyproject.toml                # Dependencies, Python version, build config
 ├── uv.lock                       # Exact resolved dependency versions
 ├── config/

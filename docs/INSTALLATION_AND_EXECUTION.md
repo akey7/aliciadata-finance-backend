@@ -45,7 +45,7 @@ Nothing is uploaded unless every step succeeds. If a later step fails, the ARIMA
 
 #### Backfilling past dates
 
-`--past-days N` fills in the N most recent dates at once, for example to give the dashboard's date selector a history to start from. It is meant to be run once, by hand; the daily run (for example from cron) is the normal command without it.
+`--past-days N` fills in the N most recent dates at once, for example to give the dashboard's date selector a history to start from. It is meant to be run once, by hand; the daily run, which cron starts on the backend's VPS (see "Running in Docker" below), is the normal command without it.
 
 ```
 uv run python scripts/run_optimization_and_time_series.py --past-days 60
@@ -76,6 +76,44 @@ Peak memory is measured on macOS and Linux only, because the counters come from 
 The number of workers drives the total. To estimate a smaller machine, measure the worst case with the worker count it would use, for example `--retrain-arima --workers 2` (add `--no-upload` to leave the bucket alone). On Linux, the exact combined peak of the whole process tree is available from cgroups: run the command under `systemd-run --user --scope -p MemoryAccounting=yes …` and read that scope's `memory.peak`.
 
 Always run scripts from the repository root, because the scripts read and write `input/` and `output/` (and read `config/`) relative to the current working directory.
+
+### Running in Docker
+
+In production the backend runs on its own Hetzner VPS, separate from the one that hosts Garage and the frontend, in a Docker container built from the `Dockerfile` at the repository root and installed there with Ansible. cron starts the container once per trading day, after the market closes, with its default command, so each run computes and uploads the most recent trading day (see "Deployment" in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md#deployment)). The image installs the production dependencies exactly as locked in `uv.lock` (`uv sync --locked --no-dev`, without the dev group), and its default command is the normal run:
+
+```
+uv run --locked --no-dev python ./scripts/run_optimization_and_time_series.py
+```
+
+`uv run` checks the environment against `uv.lock` with those same options before starting, so the container runs only with the configured production dependencies. If one were missing, it would be installed from the network before the run. The container needs network access anyway, for Massive.com, FRED, and Garage.
+
+Build the image from the repository root:
+
+```
+docker build -t aliciadata-finance-backend .
+```
+
+The image contains no secrets: `.dockerignore` keeps `.env`, `input/`, and `output/` out of it. Pass the variables listed under "`.env` file" below at run time, for example from an environment file kept on the VPS, and mount `input/` and `output/` so the caches and results outlast the container:
+
+```
+docker run --rm --env-file <path to the env file> \
+  -v <host folder>/input:/app/input \
+  -v <host folder>/output:/app/output \
+  aliciadata-finance-backend
+```
+
+Inside the container there is no `.env` file, so the scripts use the variables passed in. The mounted folders must be writable by the container's user (`appuser`). Without the mounts, each run starts with empty caches and downloads everything again, and its `output/` files are lost when the container stops; the uploads to Garage are unaffected.
+
+To pass flags such as `--no-upload` or `--past-days N`, give the whole command after the image name, because arguments there replace the default command rather than adding to it:
+
+```
+docker run --rm --env-file <path to the env file> \
+  -v <host folder>/input:/app/input -v <host folder>/output:/app/output \
+  aliciadata-finance-backend \
+  uv run --locked --no-dev python ./scripts/run_optimization_and_time_series.py --no-upload
+```
+
+The image's Python version must stay equal to `.python-version`. When either changes, update the `FROM` line of the `Dockerfile` in the same change.
 
 ### Model settings
 
@@ -144,7 +182,7 @@ Here are the keys the scripts need to function:
 
 1. `MASSIVE_API_KEY`: Key to Massive.com API for stock and index data. Obtain from API provider.
 
-2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region, and endpoint of the Garage S3 server on the Hetzner VPS (see "Deployment" in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md#deployment)). These are boto3's standard names. The key needs read/write/delete permission on the bucket. `AWS_DEFAULT_REGION` must equal the region Garage is configured with (its `s3_region` setting), or Garage rejects the request signatures. `AWS_ENDPOINT_URL_S3` is the base URL of Garage's S3 API (for example `https://<s3-host>`), with no bucket name in its host and no path; the uploader refuses to run otherwise. Obtain the key from Garage (a key with access to the bucket) and the endpoint and region from the VPS's configuration.
+2. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3`: key id, secret key, region, and endpoint of the Garage S3 server on the frontend's Hetzner VPS (see "Deployment" in [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md#deployment)). These are boto3's standard names. The key needs read/write/delete permission on the bucket. `AWS_DEFAULT_REGION` must equal the region Garage is configured with (its `s3_region` setting), or Garage rejects the request signatures. `AWS_ENDPOINT_URL_S3` is the base URL of Garage's S3 API (for example `https://<s3-host>`), with no bucket name in its host and no path; the uploader refuses to run otherwise. Obtain the key from Garage (a key with access to the bucket) and the endpoint and region from the VPS's configuration.
 
 3. `S3_BUCKET_NAME`: Name of the one S3 bucket that holds all frontend data.
 
