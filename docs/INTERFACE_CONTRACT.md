@@ -2,8 +2,8 @@
 
 | | |
 | --- | --- |
-| **Contract version** | 52 |
-| **Last updated** | 2026-11-23 |
+| **Contract version** | 53 |
+| **Last updated** | 2026-11-24 |
 | **Source of truth** | `aliciadata-finance-backend` (backend, formerly `fuzzy-system-research`). The copy in `aliciadata-finance-frontend` (formerly `fuzzy-system-finance`) is a mirror. |
 
 This file is stored **byte-for-byte identically** in both repos. It describes the files the backend uploads to one S3-compatible bucket (served by a self-hosted Garage server, accessed with `boto3`) and the frontend reads. Treat it as a public API.
@@ -26,7 +26,7 @@ Version 1 was written from the backend code. Version 2 was checked against real 
 
 ## Where the data lives
 
-All data lives in **one S3 bucket**, served by [Garage](https://garagehq.deuxfleurs.fr/), a self-hosted S3-compatible object store, on a VPS hosted by Hetzner. The frontend runs on the same VPS; the backend does not, and uploads over the network (see "Deployment" in the backend's `docs/SYSTEM_DESIGN.md`). Inside the bucket are **two top-level folders** (key prefixes), whose names are the values of two environment variables. Both the backend and the frontend use these variable names:
+All data lives in **one S3 bucket**, served by [Garage](https://garagehq.deuxfleurs.fr/), a self-hosted S3-compatible object store, on a VPS hosted by Hetzner. The frontend runs on the same VPS. Since v53 the backend runs on a separate Hetzner VPS, in a Docker container, and uploads to Garage over the network through its S3 API (see "Deployment" in the backend's `docs/SYSTEM_DESIGN.md`). Inside the bucket are **two top-level folders** (key prefixes), whose names are the values of two environment variables. Both the backend and the frontend use these variable names:
 
 | Environment variable | Meaning |
 | --- | --- |
@@ -87,7 +87,7 @@ General behavior of every file:
 
 - **History.** Each date folder is a snapshot of one run. Comparing dates is valid (same keys, formats, and units within a contract version), but a date folder written under an older contract version keeps the format of that version.
 - **Non-atomic.** The files are uploaded one after the other (forecasts, forecasts metadata, `.h5`, the backtest files, then optimization metadata). The completion marker rule above prevents reading a half-uploaded date. While a date is re-run, its files can briefly come from different runs.
-- **Manual cadence.** The backend is run by hand, so there is no guaranteed update schedule. The frontend should display the data dates (see below) so a stale dataset is visible, rather than assuming data is current.
+- **Scheduled, not guaranteed** (since v53; before, the backend was run by hand). cron runs the backend once per trading day, after the market closes, for the most recent trading day, so a new date normally appears each trading evening. A run can still fail or be missed, and past dates can be added later (see "Re-runs and past dates"), so there is no guaranteed update schedule. The frontend should display the data dates (see below) so a stale dataset is visible, rather than assuming data is current.
 - **Content type and ACLs.** The backend sets none. Do not rely on the `Content-Type` of an object; decide how to parse from the key name.
 - **Not investment advice: one disclaimer, shown once.** Display this wording exactly once, at the bottom of the UI:
 
@@ -729,7 +729,7 @@ units:
 5. **Fail soft.** If a file is missing or does not parse, show an explanatory message instead of crashing. Missing or partial data is expected while a run is mid-upload.
 6. **Label units.** Daily versus annualized, and percent versus dollars, must be stated wherever a value is shown.
 7. **Date selection.** Offer only *available* dates (see "Which dates are available"), newest first, with the newest selected by default. Load all files from the **same** date in both folders; never mix dates across files. Ignore keys whose segment after the folder is not a valid date, including stale objects directly under a folder from contract v8 and earlier.
-8. **Do not assume consecutive dates.** Runs are manual, so dates have gaps (weekends, holidays, days not run).
+8. **Do not assume consecutive dates.** Dates have gaps: weekends and NYSE holidays never have a date folder, and a scheduled run can fail or be missed.
 
 ## Verification status
 
@@ -782,6 +782,7 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 53 | 2026-11-24 | Documentation only; no change to files, keys, folder names, columns, types, units, values, the upload order, or the environment variable names. The backend now runs on its own Hetzner VPS, separate from the one that hosts Garage and the frontend, in a Docker container started by cron once per trading day after the market closes, for the most recent trading day, instead of by hand on a local machine. It still uploads through Garage's S3 API exactly as before. "Where the data lives" says where the backend runs, "Manual cadence" becomes "Scheduled, not guaranteed", and reader requirement 8 no longer says runs are manual. Frontend: no change required; a new date normally appears each trading evening, but keep listing dates on every load and showing the data date, since a run can still fail or be missed; replace its copy with this file. |
 | 52 | 2026-11-23 | **Configuration change**; no key, column, file name, type, unit, or upload order changes. The forecasts now score the last **250** trading days (about a year) instead of 60: the backend's `time_series_models.evaluation_window_length` setting, now equal to the portfolio backtest's length. `all_forecasts.csv` normally has 251 rows (250 backtest + live) instead of 61. In `all_forecasts_metadata.yml`, values change but keys do not: `evaluation_window.target_trading_days`, and normally `n_evaluated` and `n_directional`, are 250, and the evaluation start dates move back about nine months. The training window, the price download, and the optimization and backtest files are unchanged. The backend now also retrains a cached forecasts file whose rows do not match its settings, so a date folder recomputed after this change cannot keep 60-day forecasts with 250-day metadata. Date folders written before v52 keep 60 scored days unless recomputed. Notes updated: "Small samples" is now "Limited samples", the suggested metrics wording no longer calls the sample modest, and "Not the forecasts' period" says the two evaluations currently cover the same days but are separate settings. Frontend must: not assume about three months of forecasts on the x-axis (check that about four times as many points per ticker still read well); keep filling `{n}` from `target_trading_days`; use the updated metrics wording; and still compare the backtest's and forecasts' lengths and start dates rather than assume they match. |
 | 51 | 2026-11-16 | Documentation only; no change to files, keys, folder names, columns, types, units, values, the upload order, or the environment variable names. The previous S3 host has been deleted, so the contract no longer names it: "Where the data lives", "Connecting", "Verification status", and the changelog entries that named it now say "bucket" or "the previous S3 host" instead. "Verification status" now records that every dev and production date folder was copied into the Garage bucket with the same keys, and a listing of the Garage bucket: four folders (dev and production for each kind), and the same 60 complete date folders in each. Frontend: no change required; replace its copy with this file. |
 | 50 | 2026-11-15 | Hosting change; no change to files, keys, folder names, columns, types, units, values, the upload order, or the environment variable names. The bucket moved to a self-hosted Garage S3 server on a Hetzner VPS, which also hosts the frontend. "Where the data lives" now says "bucket" throughout, and "Connecting" gives the endpoint rule generally (the S3 API's base URL, with no bucket name in the host and no path) and notes that the region must equal Garage's configured region. "Verification status" now says the storage-layout listings were made on the previous host. Frontend: point its endpoint, region, and key at Garage (each side's own configuration, not part of this contract); no code change is required by the contract; replace its copy with this file. |

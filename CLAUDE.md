@@ -20,13 +20,13 @@ Editing the *code* of scripts that read from `input/` or write to `output/` is f
 
 ## What this project is
 
-A hobby project (also a portfolio piece) that demonstrates time series modeling and portfolio optimization on familiar financial data. The backend is run **manually, locally, on a Mac mini** (macOS). It:
+A hobby project (also a portfolio piece) that demonstrates time series modeling and portfolio optimization on familiar financial data. In production the backend runs on **its own Hetzner VPS, in a Docker container** built from the repository's `Dockerfile` and installed with Ansible; **cron runs it unattended** once per trading day, after the close, for the most recent trading day. For development it is also run directly with `uv` on macOS. It:
 
 1. Downloads adjusted open/high/low/close data for a portfolio of stocks from Massive.com (API key variable `MASSIVE_API_KEY`), covering enough recent trading days for the optimization and the configured ARIMA windows, through the most recent trading day. Separately, it downloads the daily 3-month U.S. Treasury bill rate from FRED (series `DTB3`, via `pandas-datareader`; no API key).
 2. Optimizes portfolio weights for (a) maximum Sharpe ratio, using the last T-bill rate dated before the as-of date as the risk-free rate, and (b) minimum variance. Also computes the efficient frontier and a Monte Carlo simulation of portfolio volatility/return.
 3. Slides a window of prior trading days to train ARIMA models predicting each day's close price over a backtest period, and computes accuracy metrics (RMSE and others, against a naive baseline) for those models. The window and backtest lengths are settings: consult `config/modeling_and_optimization.yml` (its comments) and the "Model settings" section of `docs/INSTALLATION_AND_EXECUTION.md` for their current values and meaning. Don't restate the values in docs.
 4. Runs a walk-forward backtest of the maximum Sharpe ratio portfolio against an equal-weight baseline, over its own number of scored days (set independently of the forecasts', ending on the same as-of date), rebalancing on a fixed schedule with no look-ahead.
-5. Uploads all ARIMA, optimization, and backtest results to an S3-compatible bucket, which the frontend reads. The bucket is served by Garage (self-hosted S3) on a Hetzner VPS, which also hosts the frontend Gradio app and a Caddy reverse proxy, each in a Docker container built and installed with Ansible. This backend is **not** on the VPS; it uploads over the network. See "Deployment" in `docs/SYSTEM_DESIGN.md`. Don't document the frontend's deployment here beyond that; the frontend repo does.
+5. Uploads all ARIMA, optimization, and backtest results to an S3-compatible bucket, which the frontend reads. The bucket is served by Garage (self-hosted S3) on a Hetzner VPS, which also hosts the frontend Gradio app and a Caddy reverse proxy, each in a Docker container built and installed with Ansible. This backend runs on a **separate** Hetzner VPS, in its own Docker container (`Dockerfile`, also built and installed with Ansible), and uploads to Garage over the network through its S3 API. See "Deployment" in `docs/SYSTEM_DESIGN.md`. Don't document the frontend's deployment here beyond that; the frontend repo does.
 
 The bucket is the **interface contract** with the frontend. Treat the schema, file names, and formats of uploaded artifacts as a public API (see "Changing the frontend contract").
 
@@ -48,6 +48,8 @@ Run from the repo root (paths to `input/` and `output/` are relative to the work
 | `config/modeling_and_optimization.yml` | Model settings: `time_series_models` (`training_window_length` in closes, `evaluation_window_length` in days) and `portfolio_optimization` (`weight_cap_multiple`, `efficient_frontier_points`, `simulated_portfolios`, `random_seed`, `near_frontier_tolerance`), and `portfolio_backtest` (`training_window_returns`, `evaluation_window_length` in days, `rebalance_interval_sessions`); checked in; changing a value changes uploads | No | No |
 | `src/aliciadata_finance_backend/config.py` | Strict loader (`load_config`, pure `parse_config`) → frozen `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`; read once by the script and passed down, never at import time | No | No |
 | `scripts/ticker_download_to_csv.py` | Download one symbol from Massive.com to CSV | Yes | No |
+| `Dockerfile` | The production image, built and installed with Ansible on the backend's own Hetzner VPS, where cron runs it after each trading day's close: Python pinned to `.python-version`, `uv` pinned, production dependencies from `uv.lock` (`uv sync --locked --no-dev`, the dependencies first for layer caching, then the project), an unprivileged user, and the default command `uv run --locked --no-dev python ./scripts/run_optimization_and_time_series.py` (same options as the build, so it runs only with the configured dependencies; it may install a missing one from the network). Settings and secrets are passed at run time, never built in. See "Running in Docker" in `docs/INSTALLATION_AND_EXECUTION.md` | Built, then run | Yes (its default command) |
+| `.dockerignore` | Keeps `.env`, `input/`, `output/`, `.venv/`, git and editor files, caches, and `docs/` out of the image build | No | No |
 | `src/aliciadata_finance_backend/data/ticker_download_manager.py` | Download new data or retrieve cached data | No | No |
 | `src/aliciadata_finance_backend/data/date_manager.py` | Date and business-day calculations (NYSE calendar via `exchange_calendars`, `nyse_sessions_ending()`); `DateManager(today=...)` pins "today", which names the daily caches in `input/` (a backfill pins the day it downloaded) | No | No |
 | `src/aliciadata_finance_backend/data/prices.py` | Pure helpers: pivot long prices to wide; sessions through an as-of date (`sessions_through()`, no look-ahead for past dates); last N trading sessions | No | No |
@@ -105,7 +107,8 @@ Put new engineering detail in the matching file under `docs/`, not in the README
 
 ## Environment and configuration
 
-- Python 3.13 (`requires-python = ">=3.13"`), pinned to 3.13.5 in `.python-version`, managed with `uv` (project-local `.venv`).
+- Python 3.13 (`requires-python = ">=3.13"`), pinned to 3.13.5 in `.python-version`, managed with `uv` (project-local `.venv`). The `Dockerfile`'s `FROM` line pins the same patch version; change both together.
+- The `Dockerfile` must never copy `.env` or bake in any secret or bucket setting (`.dockerignore` excludes `.env`); the container gets them at run time. Building or running the image counts as execution, so the human does it.
 - Dependencies: `pyproject.toml` (`dependencies` for production, `[dependency-groups] dev` for development), locked in `uv.lock`. Claude may edit `pyproject.toml`, but must not run `uv` or install anything, and must not hand-edit `uv.lock`. Tell the human which commands to run (`uv lock`, `uv sync`). Pin every dependency as `~=X.Y.Z` (three parts: major and minor fixed, patch updates allowed). Dependabot (`.github/dependabot.yml`) opens weekly update pull requests into `develop`, plus security updates (enabled in the repository settings); the human merges each one.
 - Never hard-code secrets, bucket names, or endpoints. Everything comes from `.env` via environment variables.
 
@@ -118,7 +121,7 @@ Put new engineering detail in the matching file under `docs/`, not in the README
 - Every `load_dotenv()` call passes `override=True`, so `.env` wins over the shell. Keep it that way: the `AWS_*` names are shared with every AWS tool.
 - These replaced the `FSF_FRONT_END_*` names in contract v45 (and, before v13, `PORTFOLIO_OPTIMIZATION_SPACE_NAME` and `TIME_SERIES_SPACE_NAME`); old names are no longer read.
 
-The bucket variables point the backend at either dev or production. **Be careful with anything that could upload.** A change to upload logic can overwrite what the live frontend displays. Flag any change that alters what gets uploaded, where, or under what key.
+The bucket variables point the backend at either dev or production. **Be careful with anything that could upload.** A change to upload logic can overwrite what the live frontend displays. Flag any change that alters what gets uploaded, where, or under what key. In production, cron runs the container unattended every trading day, so a change reaches the production bucket on the first scheduled run after its image is installed, with no one watching; say so whenever a change affects what a normal run computes or uploads, and recommend checking it against the dev folders first.
 
 ## How to work in this repo
 
