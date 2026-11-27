@@ -22,7 +22,7 @@ uv sync --no-dev
 
 ### Running the backend
 
-One command runs everything: it downloads prices (or reuses today's cached download), fits the walk-forward ARIMA forecasts (or reuses the cached forecasts for the data's as-of date), optimizes the portfolio, backtests it against equal weights, and uploads all results for the frontend. Run it through `uv` so it uses the project environment; there is no need to activate the virtual environment manually:
+One command runs everything: it downloads prices (or reuses today's cached download), fits the walk-forward ARIMA and ARIMAX forecasts (or reuses the cached forecasts for the data's as-of date), optimizes the portfolio, backtests it against equal weights, and uploads all results for the frontend. Run it through `uv` so it uses the project environment; there is no need to activate the virtual environment manually:
 
 ```
 uv run python scripts/run_optimization_and_time_series.py
@@ -33,9 +33,9 @@ Options:
 | Flag | Effect |
 | --- | --- |
 | `--no-upload` | Write the `output/` files but upload nothing. Use this to check a run without touching any bucket. |
-| `--retrain-arima` | Retrain the ARIMA models even if forecasts for the as-of date are cached. Without it, cached forecasts whose rows do not match the data and settings (for example after `time_series_models.evaluation_window_length` changes) are retrained anyway; a change to `training_window_length` alone, or to `exogenous_variables`, is not detected and needs this flag. Forecasts cached before ARIMAX was added are retrained automatically. |
+| `--retrain-arima` | Retrain the ARIMA and ARIMAX models even if forecasts for the as-of date are cached. Without it, cached forecasts whose rows do not match the data and settings (for example after `time_series_models.evaluation_window_length` changes) are retrained anyway; a change to `training_window_length` alone, or to `exogenous_variables`, is not detected and needs this flag. Forecasts cached before ARIMAX was added are retrained automatically. |
 | `--refresh-data` | Download prices again even if today's download is cached. |
-| `--workers N` | Number of worker processes for ARIMA training. Defaults to half the logical CPUs (for example 8 on a 16-thread Intel CPU, 5 on a 10-core M4). `--workers 1` trains everything in one process. The forecasts do not depend on this setting. |
+| `--workers N` | Number of worker processes for ARIMA and ARIMAX training (one pool for both). Defaults to half the logical CPUs (for example 8 on a 16-thread Intel CPU, 5 on a 10-core M4). `--workers 1` trains everything in one process. The forecasts do not depend on this setting. |
 | `--config PATH` | Model settings file to use instead of `config/modeling_and_optimization.yml` (see below). |
 | `--as-of YYYY-MM-DD` | Run for a past NYSE session, as if the price data ended that day: later prices are cut off before any step uses them, and the results are written to, and uploaded under, that date's folder, replacing any files already there. The date must be a session in the price data; the download is lengthened to cover the sessions after it. Defaults to the latest session, and giving the latest session is the same as leaving it out. |
 | `--past-days N` | One-time backfill: run the whole pipeline for each of the N most recent sessions, oldest first, uploading each date as it finishes (see "Backfilling past dates" below). `--past-days 1` is the latest session only. Cannot be combined with `--as-of`. |
@@ -61,14 +61,14 @@ What it does:
 
 Backfilled dates are computed with today's method, settings, and adjusted prices, which can differ from what was available on the date itself (for example after a later split). Their metadata files record when they were computed (`computed_at`) and the contract version (`contract_version`); see `INTERFACE_CONTRACT.md`, "Re-runs and past dates".
 
-Expect roughly one normal run's time per date. About 20 to 40 minutes for 60 dates on the M4 Pro machines was measured before the forecasts' scored days grew about fourfold (contract v52); the ARIMA work grows in proportion, so expect that part of each run to take about four times as long. Try a backfill against the dev folders first.
+Expect roughly one normal run's time per date. About 20 to 40 minutes for 60 dates on the M4 Pro machines was measured before the forecasts' scored days grew about fourfold (contract v52); the ARIMA work grows in proportion, so expect that part of each run to take about four times as long, and about twice that again since ARIMAX was added (contract v54), which fits four candidate orders per window next to ARIMA's three. Try a backfill against the dev folders first.
 
 #### Peak memory
 
 After a successful run, after the uploads, the script prints the run's peak memory, for sizing the machine it runs on (for example a VPS). The figures are resident set sizes (physical RAM) in MiB (1 MiB = 1,048,576 bytes), read from the operating system's counters:
 
 - **Main process:** the peak of the process running the pipeline.
-- **Largest ARIMA worker:** the peak of the largest worker process, shown only when ARIMA was trained with more than one worker. With cached forecasts (no `--retrain-arima` on a date already trained) or `--workers 1`, no workers run, and the main process's peak is the whole run's.
+- **Largest ARIMA worker:** the peak of the largest worker process (ARIMA and ARIMAX share the pool), shown only when the models were trained with more than one worker. With cached forecasts (no `--retrain-arima` on a date already trained) or `--workers 1`, no workers run, and the main process's peak is the whole run's.
 - **Upper bound for all processes together:** main + workers × largest worker. The operating system reports each process's peak separately, not their combined peak, and the workers run at the same time as the main process, so the true combined peak is at most this.
 
 Peak memory is measured on macOS and Linux only, because the counters come from Python's Unix-only `resource` module. On Windows the run prints a note instead, and a backfill leaves the memory columns of its log empty; everything else runs as usual.

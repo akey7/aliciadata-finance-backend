@@ -137,10 +137,10 @@ aliciadata-finance-backend/
 │   ├── backfill.py               # --past-days: one download, the checks, the per-date loop and log
 │   ├── config.py                 # Loads and validates the model settings file
 │   ├── memory_usage.py           # Peak memory of a run, printed by the entry script
-│   ├── pipeline.py               # One full run: prices → ARIMA → metrics → optimization → backtest → uploads
+│   ├── pipeline.py               # One full run: prices → ARIMA and ARIMAX → metrics → optimization → backtest → uploads
 │   ├── data/                     # Market data download, caching, price reshaping, and date logic
 │   ├── optimization/             # Portfolio optimization math and its backtest
-│   ├── forecasting/              # ARIMA models and the walk-forward training workflow
+│   ├── forecasting/              # ARIMA and ARIMAX models and the walk-forward training workflow
 │   └── storage/                  # Output/bucket key layout and S3 uploads
 ├── tests/                        # Tests (use mocks and temporary directories only)
 ├── input/                        # Cached market data (not committed)
@@ -186,7 +186,7 @@ Run these directly with `uv run python scripts/<filename>` from the repository r
 
 | Filename                                | Purpose                                                                                                                                                                                                                   | Uploads to front end? |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `scripts/run_optimization_and_time_series.py` | The whole backend in one run: obtain adjusted close prices, fit walk-forward ARIMA forecasts, compute max Sharpe ratio and min variance portfolios, the efficient frontier, and a Monte Carlo simulation, backtest the max Sharpe ratio portfolio against equal weights, then upload. See "Running the backend" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#running-the-backend) for flags. | Yes |
+| `scripts/run_optimization_and_time_series.py` | The whole backend in one run: obtain adjusted close prices, fit walk-forward ARIMA and ARIMAX forecasts, compute max Sharpe ratio and min variance portfolios, the efficient frontier, and a Monte Carlo simulation, backtest the max Sharpe ratio portfolio against equal weights, then upload. See "Running the backend" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#running-the-backend) for flags. | Yes |
 | `scripts/ticker_download_to_csv.py`     | Download a supported symbol from Massive.com and put the results into a `.csv` file. Usage: `uv run python scripts/ticker_download_to_csv.py <ticker> <date_from> <date_to> <filename>`.                                    | No                    |
 
 ### Library modules
