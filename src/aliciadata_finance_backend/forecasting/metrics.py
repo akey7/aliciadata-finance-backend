@@ -1,7 +1,8 @@
 """
 Forecast accuracy metrics for all_forecasts_metadata.yml (see
-docs/INTERFACE_CONTRACT.md): how well the ARIMA and naive forecasts in
-all_forecasts.csv did over the most recent days with an actual close.
+docs/INTERFACE_CONTRACT.md): how well the ARIMA, ARIMAX, and naive
+forecasts in all_forecasts.csv did over the most recent days with an actual
+close.
 
 Everything here is pure except write_forecast_metadata(). Metrics are
 computed from the forecasts table exactly as written to the CSV, so they
@@ -19,12 +20,19 @@ Definitions, per ticker T, over the evaluated rows:
   actual move on which ARIMA predicted the direction of the move correctly.
   The move is measured from the naive forecast, the previous close. The naive
   forecast predicts no move, so it has no direction to score.
+- ARIMAX has the same error metrics and directional accuracy, scored on the
+  rows where ARIMAX, ARIMA, naive, and the actual are all present, and two
+  comparisons on those same rows: vs_naive (ARIMAX MAE / naive MAE) and
+  vs_arima (ARIMAX MAE / ARIMA MAE), each with its skill, 1 - relative_mae.
+  vs_arima below 1 means the exogenous variables helped over ARIMA on those
+  days.
 """
 
 import math
 import numpy as np
 import pandas as pd
 import yaml
+from aliciadata_finance_backend.config import ExogenousVariable
 from aliciadata_finance_backend.forecasting.arima_models import PRICE_DIFFERENCING_ORDER
 from aliciadata_finance_backend.forecasting.ticker_predict import (
     ARIMA_MAX_P,
@@ -91,6 +99,73 @@ def directional_accuracy(
     return float(np.mean(predicted_move[moved] == actual_move[moved])), n_scored
 
 
+def relative_mae(model_mae: float | None, baseline_mae: float | None) -> dict:
+    """
+    {"relative_mae": model MAE / baseline MAE, "skill": 1 - relative_mae}
+    for two MAEs over the same days. Both None when either MAE is missing or
+    the baseline's is 0. Pure function.
+    """
+    if model_mae is not None and baseline_mae:
+        ratio = model_mae / baseline_mae
+        return {
+            "relative_mae": _float_or_none(ratio),
+            "skill": _float_or_none(1 - ratio),
+        }
+    return {"relative_mae": None, "skill": None}
+
+
+def arimax_metrics(with_actual: pd.DataFrame, ticker: str) -> dict:
+    """
+    ARIMAX metrics for one ticker over the same candidate rows as
+    ticker_metrics() (the last eval_days rows with an actual close), scored
+    only where ARIMAX, ARIMA, the naive forecast, and the actual are all
+    present, so the three models are compared on exactly the same days. Pure
+    function.
+
+    Those days are normally the same as ARIMA's. They are fewer when an
+    exogenous value that a row's ARIMAX forecast needed was missing; then the
+    comparisons here use the naive and ARIMA errors on ARIMAX's days, which
+    can differ slightly from the ticker's own naive and arima blocks.
+
+    Parameters
+    ----------
+    with_actual : pd.DataFrame
+        The forecasts table restricted to the rows ticker_metrics()
+        considers, with T_arimax, T_arima, T_naive, and T columns for this
+        ticker.
+
+    ticker : str
+        The ticker T, as in the column names.
+
+    Returns
+    -------
+    dict
+        rmse, mae, mape, directional_accuracy, and n_directional, as for
+        ARIMA; n_evaluated, the days scored; and vs_naive and vs_arima, each
+        with relative_mae (ARIMAX MAE / the other model's MAE on the same
+        days) and skill (1 - relative_mae).
+    """
+    arimax = with_actual[f"{ticker}_arimax"]
+    arima = with_actual[f"{ticker}_arima"]
+    naive = with_actual[f"{ticker}_naive"]
+    actual = with_actual[ticker]
+    complete = arimax.notna() & arima.notna() & naive.notna() & actual.notna()
+    arimax, arima = arimax[complete], arima[complete]
+    naive, actual = naive[complete], actual[complete]
+    arimax_errors = error_metrics(arimax, actual)
+    naive_mae = error_metrics(naive, actual)["mae"]
+    arima_mae = error_metrics(arima, actual)["mae"]
+    direction, n_directional = directional_accuracy(arimax, naive, actual)
+    return {
+        **arimax_errors,
+        "directional_accuracy": direction,
+        "n_directional": n_directional,
+        "n_evaluated": int(complete.sum()),
+        "vs_naive": relative_mae(arimax_errors["mae"], naive_mae),
+        "vs_arima": relative_mae(arimax_errors["mae"], arima_mae),
+    }
+
+
 def ticker_metrics(forecasts_df: pd.DataFrame, ticker: str, eval_days: int) -> dict:
     """
     Metrics for one ticker over the last eval_days rows that have an actual
@@ -98,11 +173,16 @@ def ticker_metrics(forecasts_df: pd.DataFrame, ticker: str, eval_days: int) -> d
     forecast are scored, so both models are compared on exactly the same
     days. The live forecast (no actual yet) is never scored. Pure function.
 
+    If the table has a T_arimax column, an arimax block is added
+    (arimax_metrics()), scored on its own complete rows among the same
+    candidate rows. The ARIMA and naive metrics do not depend on it.
+
     Parameters
     ----------
     forecasts_df : pd.DataFrame
         The forecasts table as written to all_forecasts.csv, indexed by
-        pred_date, with columns T_arima, T_naive and T for this ticker.
+        pred_date, with columns T_arima, T_naive and T for this ticker, and
+        optionally T_arimax.
 
     ticker : str
         The ticker T, as in the column names.
@@ -127,13 +207,8 @@ def ticker_metrics(forecasts_df: pd.DataFrame, ticker: str, eval_days: int) -> d
     arima_errors = error_metrics(arima, actual)
     naive_errors = error_metrics(naive, actual)
     direction, n_directional = directional_accuracy(arima, naive, actual)
-    if arima_errors["mae"] is not None and naive_errors["mae"]:
-        relative_mae = arima_errors["mae"] / naive_errors["mae"]
-        skill = 1 - relative_mae
-    else:
-        relative_mae = skill = None
 
-    return {
+    metrics = {
         "n_evaluated": int(complete.sum()),
         "evaluation_start_date": (
             _date_str(with_actual.index[0]) if len(with_actual) else None
@@ -141,8 +216,7 @@ def ticker_metrics(forecasts_df: pd.DataFrame, ticker: str, eval_days: int) -> d
         "evaluation_end_date": (
             _date_str(with_actual.index[-1]) if len(with_actual) else None
         ),
-        "relative_mae": _float_or_none(relative_mae),
-        "skill": _float_or_none(skill),
+        **relative_mae(arima_errors["mae"], naive_errors["mae"]),
         "arima": {
             **arima_errors,
             "directional_accuracy": direction,
@@ -150,11 +224,68 @@ def ticker_metrics(forecasts_df: pd.DataFrame, ticker: str, eval_days: int) -> d
         },
         "naive": naive_errors,
     }
+    if f"{ticker}_arimax" in with_actual.columns:
+        metrics["arimax"] = arimax_metrics(with_actual, ticker)
+    return metrics
 
 
-def models_block(training_window_returns: int) -> dict:
+def arimax_model_block(
+    training_window_returns: int, exogenous_variables: tuple[ExogenousVariable, ...]
+) -> dict:
     """
-    How the two forecasts are made, from the constants and settings the code
+    How the ARIMAX forecasts are made (see forecasting/arimax_models.py), for
+    models.arimax. Pure function.
+
+    Parameters
+    ----------
+    training_window_returns : int
+        Daily log returns in each training window.
+
+    exogenous_variables : tuple[ExogenousVariable, ...]
+        The regressors, in the order they are used. At least one.
+    """
+    max_lag = max(v.lag for v in exogenous_variables)
+    return {
+        "description": (
+            "regression of daily log returns on lagged exogenous variables "
+            "with ARMA(p, q) errors, which is ARIMAX(p, "
+            f"{PRICE_DIFFERENCING_ORDER}, q) on log prices"
+        ),
+        "d": PRICE_DIFFERENCING_ORDER,
+        "p_values": list(range(ARIMA_MAX_P)),
+        "q_values": list(range(ARIMA_MAX_Q)),
+        "excluded_orders": [],
+        "order_selection": (
+            "lowest BIC, each candidate order fit once on the same rows of "
+            "the training window"
+        ),
+        "order_selection_tie_break": "fewer parameters (p + q), then lower p",
+        # The first max_lag returns of a window have no lagged regressor
+        # built from data inside the window.
+        "fit_returns": training_window_returns - max_lag,
+        "exogenous_variables": [
+            {
+                "symbol": v.symbol,
+                "source": v.source,
+                "transform": v.transform,
+                "lag_sessions": v.lag,
+            }
+            for v in exogenous_variables
+        ],
+        "missing_exogenous_values": (
+            "a session whose regressor is missing is skipped in the fit; a "
+            "missing regressor for the forecast day leaves that row without "
+            "an ARIMAX forecast"
+        ),
+    }
+
+
+def models_block(
+    training_window_returns: int,
+    exogenous_variables: tuple[ExogenousVariable, ...] = (),
+) -> dict:
+    """
+    How the forecasts are made, from the constants and settings the code
     uses, so the metadata file explains itself. Pure function.
 
     Parameters
@@ -162,8 +293,13 @@ def models_block(training_window_returns: int) -> dict:
     training_window_returns : int
         Daily log returns in each training window, on which every candidate
         order is scored.
+
+    exogenous_variables : tuple[ExogenousVariable, ...], optional
+        The ARIMAX regressors. If any are given, an arimax block is added
+        (arimax_model_block()); otherwise only arima and naive are
+        described.
     """
-    return {
+    blocks = {
         "arima": {
             "description": (
                 f"ARIMA(p, 0, q) on daily log returns, which is "
@@ -186,6 +322,11 @@ def models_block(training_window_returns: int) -> dict:
             "description": "the most recent observed close (random walk)",
         },
     }
+    if exogenous_variables:
+        blocks["arimax"] = arimax_model_block(
+            training_window_returns, tuple(exogenous_variables)
+        )
+    return blocks
 
 
 def build_forecast_metadata(
@@ -196,9 +337,14 @@ def build_forecast_metadata(
     *,
     eval_days: int,
     training_window_returns: int,
+    exogenous_variables: tuple[ExogenousVariable, ...] = (),
 ) -> dict:
     """
     Build the contents of all_forecasts_metadata.yml. Pure function.
+
+    Tickers whose forecasts include T_arimax get an arimax block of metrics
+    (see ticker_metrics()); models.arimax describes the model when
+    exogenous_variables is not empty.
 
     Parameters
     ----------
@@ -220,6 +366,10 @@ def build_forecast_metadata(
     training_window_returns : int
         Daily log returns in each training window
         (TimeSeriesConfig.training_window_returns).
+
+    exogenous_variables : tuple[ExogenousVariable, ...], optional
+        The ARIMAX regressors (ModelingConfig.exogenous_variables). Defaults
+        to none, which describes no ARIMAX model.
 
     Returns
     -------
@@ -255,7 +405,7 @@ def build_forecast_metadata(
             "skill": "ratio",
             "directional_accuracy": "fraction",
         },
-        "models": models_block(training_window_returns),
+        "models": models_block(training_window_returns, exogenous_variables),
         "ticker_metrics": per_ticker,
     }
 

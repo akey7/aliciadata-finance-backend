@@ -41,7 +41,7 @@ PORTFOLIO_BACKTEST_METADATA_FILENAME = "portfolio_backtest_metadata.yml"
 # The version of docs/INTERFACE_CONTRACT.md that the uploaded files follow,
 # written to every metadata file as contract_version. A test checks that it
 # equals the version in that file, so bump both together.
-CONTRACT_VERSION = 54
+CONTRACT_VERSION = 55
 
 BACKFILL = "backfill"
 

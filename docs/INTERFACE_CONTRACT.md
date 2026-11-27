@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Contract version** | 54 |
+| **Contract version** | 55 |
 | **Last updated** | 2026-11-27 |
 | **Source of truth** | `aliciadata-finance-backend` (backend, formerly `fuzzy-system-research`). The copy in `aliciadata-finance-frontend` (formerly `fuzzy-system-finance`) is a mirror. |
 
@@ -618,7 +618,7 @@ The frontend may adapt this wording, but it must keep its meaning: the model is 
 
 ### Not included
 
-The file does **not** contain error metrics or confidence intervals. The naive baseline is included since v19 (`T_naive`). The selected model orders are included: `T_arima_p` and `T_arima_q` since v16, `T_arima_d` since v18. Since v21, error metrics for both forecasts are in `all_forecasts_metadata.yml` (next section). Use those rather than computing metrics in the frontend, so every surface reports the same numbers. In v54, `all_forecasts_metadata.yml` does not score `T_arimax` or describe the ARIMAX model; until it does, do not show ARIMAX accuracy figures.
+The file does **not** contain error metrics or confidence intervals. The naive baseline is included since v19 (`T_naive`). The selected model orders are included: `T_arima_p` and `T_arima_q` since v16, `T_arima_d` since v18. Since v21, error metrics for both forecasts are in `all_forecasts_metadata.yml` (next section). Use those rather than computing metrics in the frontend, so every surface reports the same numbers. Since v55 it also scores `T_arimax` (`ticker_metrics.<ticker>.arimax`) and describes the ARIMAX model (`models.arimax`); v54 files do not, so show no ARIMAX accuracy for those dates.
 
 ---
 
@@ -626,7 +626,7 @@ The file does **not** contain error metrics or confidence intervals. The naive b
 
 **Folder:** `S3_TIME_SERIES_FOLDER`. **Key:** `<S3_TIME_SERIES_FOLDER>/YYYY-MM-DD/all_forecasts_metadata.yml`, in the same date folder as `all_forecasts.csv`. **Format:** YAML (block style, keys sorted alphabetically), UTF-8; parse with a safe YAML loader. *Added in v21; date folders written before v21 do not have it, so treat it as optional.*
 
-It describes the most recent forecasts in that date's `all_forecasts.csv`: the training window of the live forecast, and how accurate the ARIMA and naive forecasts were over the last `evaluation_window.target_trading_days` trading days with an actual close. Both window lengths are backend settings that can change between runs; this file records the values each run used, so read them here rather than assuming them. The backend computes it from the CSV exactly as uploaded.
+It describes the most recent forecasts in that date's `all_forecasts.csv`: the training window of the live forecast, and how accurate the ARIMA and naive forecasts (and, since v55, the ARIMAX forecasts) were over the last `evaluation_window.target_trading_days` trading days with an actual close. Both window lengths are backend settings that can change between runs; this file records the values each run used, so read them here rather than assuming them. The backend computes it from the CSV exactly as uploaded.
 
 **All keys are lowercase snake_case, including the ticker keys under `ticker_metrics`.** Ticker symbols are lowercased here (`xbi`, `qqq`, ...), unlike every other file, where they are uppercase. Match them with a case-insensitive comparison, e.g. `ticker.lower()`.
 
@@ -661,6 +661,25 @@ models:
     q_values:
     - 0
     - 1
+  arimax:                                  # since v55
+    d: 1
+    description: regression of daily log returns on lagged exogenous variables with ARMA(p, q) errors, which is ARIMAX(p, 1, q) on log prices
+    excluded_orders: []
+    exogenous_variables:
+    - lag_sessions: 1
+      source: massive
+      symbol: I:SPX
+      transform: log_return
+    fit_returns: <training_window_returns minus the largest lag>
+    missing_exogenous_values: a session whose regressor is missing is skipped in the fit; a missing regressor for the forecast day leaves that row without an ARIMAX forecast
+    order_selection: lowest BIC, each candidate order fit once on the same rows of the training window
+    order_selection_tie_break: fewer parameters (p + q), then lower p
+    p_values:
+    - 0
+    - 1
+    q_values:
+    - 0
+    - 1
   naive:
     description: the most recent observed close (random walk)
 ticker_metrics:
@@ -671,6 +690,19 @@ ticker_metrics:
       mape: 1.32
       n_directional: <scored days with a nonzero move>
       rmse: 1.52
+    arimax:                                # since v55
+      directional_accuracy: 0.54
+      mae: 1.22
+      mape: 1.33
+      n_directional: <scored days with a nonzero move>
+      n_evaluated: <normally the same as n_evaluated below>
+      rmse: 1.53
+      vs_arima:
+        relative_mae: 1.008
+        skill: -0.008
+      vs_naive:
+        relative_mae: 0.976
+        skill: 0.024
     evaluation_end_date: '2026-10-09'
     evaluation_start_date: '<first scored session, YYYY-MM-DD>'
     n_evaluated: <normally target_trading_days>
@@ -711,6 +743,11 @@ units:
 | `ticker_metrics.<ticker>.skill` | float or null | `1 − relative_mae`. **Above 0 means ARIMA beat the naive forecast**, 0 means no better, below 0 means worse. `null` when `relative_mae` is. |
 | `ticker_metrics.<ticker>.arima.directional_accuracy` | float or null | Fraction of scored days on which ARIMA predicted the direction of the move from the previous close correctly (0 to 1). Days with no move are skipped; `null` if no day moved. The naive forecast predicts no move, so it has no directional accuracy. |
 | `ticker_metrics.<ticker>.arima.n_directional` | int | Days scored for directional accuracy. |
+| `models.arimax.*` | mixed | How the ARIMAX forecasts are made: `description`, `d`, the order search (`p_values`, `q_values`, and `excluded_orders`, which is empty because `(0, 0)` is a candidate), `order_selection` and `order_selection_tie_break` as for ARIMA, `fit_returns` (log returns each ARIMAX model is fit on: `forecast_window.training_window_returns` minus the largest lag), `exogenous_variables` (a list, one entry per regressor, each with `symbol`, `source`, `transform`, and `lag_sessions`; read it rather than assuming the S&P 500 is the only one), and `missing_exogenous_values` (the missing-data rule, in words). *Added in v55; absent in older files, so treat the whole block as optional.* |
+| `ticker_metrics.<ticker>.arimax.n_evaluated` | int | Days on which ARIMAX was scored: those of the ticker's evaluation window on which the ARIMAX, ARIMA, and naive forecasts and the actual close are all present. Normally equal to the ticker's `n_evaluated`; fewer if an exogenous value a forecast needed was missing. *Added in v55, like every key under `arimax`; treat the block as optional.* |
+| `ticker_metrics.<ticker>.arimax.rmse`, `.mae`, `.mape`, `.directional_accuracy`, `.n_directional` | float or null; int | The same metrics as for ARIMA, in the same units, for the ARIMAX forecast over its `n_evaluated` days. |
+| `ticker_metrics.<ticker>.arimax.vs_naive.relative_mae`, `.vs_naive.skill` | float or null | ARIMAX MAE ÷ naive MAE over ARIMAX's `n_evaluated` days, and `1 −` that. **Below 1 (skill above 0) means ARIMAX was more accurate than the naive forecast.** `null` if the naive MAE is 0 or nothing was scored. |
+| `ticker_metrics.<ticker>.arimax.vs_arima.relative_mae`, `.vs_arima.skill` | float or null | ARIMAX MAE ÷ ARIMA MAE over the same days, and `1 −` that. **Below 1 (skill above 0) means the exogenous variables made the forecast more accurate than ARIMA alone.** `null` if the ARIMA MAE is 0 or nothing was scored. |
 | `computed_at` | string | When the backend computed this date folder, in UTC, as `YYYY-MM-DDTHH:MM:SSZ` (for example `2026-11-14T12:00:00Z`): the start of the run that wrote it. All metadata files from one run have the same value. It can be long after the folder's date (see "Re-runs and past dates"). *Added in v48; absent in older files, so treat it as optional.* |
 | `contract_version` | int | The version of this contract the date folder was written under (`48` or later). Files without it were written under an earlier version. *Added in v48; absent in older files, so treat it as optional.* |
 
@@ -720,6 +757,8 @@ units:
 - **What "relative MAE" is.** It is the ratio of out-of-sample MAEs over the same scored days. It is related to, but not the same as, Hyndman's MASE, which scales by the naive forecast's in-sample error. Label it "relative MAE" (or "skill" for `1 − relative_mae`), not "MASE".
 - **Limited samples.** The scored days (`target_trading_days`) are a limited sample. Since v52 it is about a trading year, so the metrics change much less from one date to the next than over a few months, but they are still one market period, and consecutive forecasts are not independent, which makes the effective sample smaller than the number of days. Say so in user-facing text. Date folders written before v52 score far fewer days and are noisier.
 - **Comparing dates.** The number of scored days and the training window can differ between date folders, so their metrics can come from different sample sizes and methods. Compare each file's `target_trading_days` and `training_window_returns` before comparing metrics across dates.
+- **Reading the ARIMAX comparisons** (since v55). The three models are compared on the same days: `vs_naive` and `vs_arima` use ARIMAX's `n_evaluated` days for every model, so when those are fewer than the ticker's `n_evaluated`, the naive and ARIMA errors behind them come from fewer days than the ticker's own `naive` and `arima` blocks. Do not divide `arimax.mae` by `arima.mae` yourself; use `vs_arima`. `vs_arima` isolates what the exogenous variables add, since ARIMA and ARIMAX see the same closes. Expect values near 1: the previous day's index return says little about the next day's return, and for tickers that move with the index (such as broad equity ETFs) it carries nearly the same information as the ticker's own previous return. A `vs_arima.relative_mae` a few percent from 1 over one evaluation window is within the noise of this sample (see "Limited samples"), so do not present it as evidence that one model is better. The backend computes no significance test.
+- **Suggested wording near the ARIMAX metrics** (fill in `{n}` from `evaluation_window.target_trading_days`, and the variables from `models.arimax.exogenous_variables`): "ARIMAX adds the previous trading day's return of the S&P 500 index as a regressor. Relative MAE against ARIMA below 1 means the index helped over ARIMA alone during these {n} trading days; values close to 1 mean it made little difference."
 - **Suggested wording near the metrics** (fill in `{n}` from `evaluation_window.target_trading_days`): "Accuracy over the last {n} trading days, comparing each forecast with the actual close. Relative MAE below 1 (skill above 0) means ARIMA's errors were smaller than the naive forecast's. RMSE and MAE are in dollars per share; MAPE is in percent and can be compared across tickers. These metrics come from one period of {n} trading days, so treat them as indicative."
 
 ---
@@ -776,7 +815,7 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 - That the date folder equals `date_updated.date_to`, and the upload order (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, `portfolio_backtest_daily.csv`, `portfolio_backtest_metadata.yml`, then `optimization_metadata.yml`). The upload order is covered by unit tests (`tests/test_pipeline.py`), and the construction of the date part of the key and of local paths is covered by unit tests (`tests/test_layout.py`).
 - The v8 NYSE calendar behavior on real data (covered by unit tests in `tests/test_date_manager.py`).
 - `all_forecasts_metadata.yml` (v21) on real output. The metric formulas are covered by unit tests on hand-computed tables (`tests/test_metrics.py`), and the file's windows and upload order by `tests/test_pipeline.py`.
-- The `T_arimax` columns (v54) on real output. The lagged regressors, the candidate orders, the forecast, and the missing-data rules are covered by unit tests (`tests/test_arimax_models.py`, `tests/test_ticker_predict.py`, `tests/test_arima_workers.py`), and the retraining of a cached file without them by `tests/test_pipeline.py`.
+- The ARIMAX metrics (`ticker_metrics.<ticker>.arimax` and `models.arimax`, v55) on real output. Their formulas are covered by unit tests on hand-computed tables (`tests/test_metrics.py`), and the file by `tests/test_pipeline.py`. The `T_arimax` columns (v54) were looked over by the human in a dev run on 2026-11-27; their lagged regressors, candidate orders, forecasts, and missing-data rules are covered by unit tests (`tests/test_arimax_models.py`, `tests/test_ticker_predict.py`, `tests/test_arima_workers.py`).
 - `NaN` entries in `efficient_frontier/xs` (inferred from the code for infeasible target returns). Readers must handle `NaN` regardless.
 - The match between `final_optimization` and the `.h5` file on real output, by reading the file directly. It is covered by unit tests and checked on every run before upload, and a real run passed that check.
 - The objects in the bucket for the backtest files. Only the local files were read.
@@ -787,6 +826,7 @@ Checked against real backend output (2026-10-11), unless dated otherwise:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 55 | 2026-11-27 | **Additive.** `all_forecasts_metadata.yml` now scores the ARIMAX forecasts (v54). Each `ticker_metrics.<ticker>` gains an `arimax` block: `rmse`, `mae`, `mape`, `directional_accuracy`, `n_directional` (as for ARIMA), `n_evaluated` (days on which ARIMAX, ARIMA, naive, and the actual are all present, normally the ticker's own `n_evaluated`), and two comparisons on those same days, `vs_naive` and `vs_arima`, each with `relative_mae` (ARIMAX MAE ÷ the other model's MAE) and `skill` (1 − that). `models` gains an `arimax` block describing the model, including its `exogenous_variables` (symbol, source, transform, `lag_sessions`) and `fit_returns`. No existing key, value, unit, file, column, or the upload order changes: the ARIMA and naive metrics are computed exactly as before. A cached forecasts file is reused as before; the metadata is rebuilt from it on every run, so re-running a v54 date gives it the new blocks. Added the fields, an example, a note on reading the comparisons (values near 1 are expected, and small differences are noise over one window), and suggested wording. Frontend: no change required; optionally show ARIMAX's `vs_naive` and `vs_arima` skill next to ARIMA's, treating both new blocks as optional (absent before v55), and fill the regressor names from `models.arimax.exogenous_variables`. |
 | 54 | 2026-11-27 | **Additive.** `all_forecasts.csv` gains four columns per ticker, after its ARIMA columns and before `T_naive`: `T_arimax` (float, may be empty), an ARIMAX forecast of the close, and `T_arimax_p`, `T_arimax_d`, `T_arimax_q` (nullable integers), its order. ARIMAX is a regression of the ticker's daily log return on exogenous variables (currently the S&P 500 index's daily log return, lagged one session) with ARMA(p, q) errors, fit on the same training windows as ARIMA with one log return fewer; orders are chosen by lowest BIC with `(0, 0)` as a candidate. `T_arimax` is empty where `T_arima` is, and on rows whose exogenous value is missing. No existing column, file, key, value, unit, or the upload order changes; `all_forecasts_metadata.yml` is unchanged and does not score ARIMAX yet. The backend retrains a cached forecasts file without ARIMAX columns, so a date folder recomputed after this change gets them. Date folders written before v54 lack them unless recomputed. Added the suffix rules for `_arimax` and its order columns, and an "ARIMAX" note under "How the forecasts are produced". Frontend: no change required; make sure columns are matched by exact suffix (`_arima` must not pick up `_arimax`, nor `_arima_p` pick up `_arimax_p`); optionally plot `T_arimax`, treating it as optional; show no ARIMAX accuracy until the metadata has it. |
 | 53 | 2026-11-24 | Documentation only; no change to files, keys, folder names, columns, types, units, values, the upload order, or the environment variable names. The backend now runs on its own Hetzner VPS, separate from the one that hosts Garage and the frontend, in a Docker container started by cron once per trading day after the market closes, for the most recent trading day, instead of by hand on a local machine. It still uploads through Garage's S3 API exactly as before. "Where the data lives" says where the backend runs, "Manual cadence" becomes "Scheduled, not guaranteed", and reader requirement 8 no longer says runs are manual. Frontend: no change required; a new date normally appears each trading evening, but keep listing dates on every load and showing the data date, since a run can still fail or be missed; replace its copy with this file. |
 | 52 | 2026-11-23 | **Configuration change**; no key, column, file name, type, unit, or upload order changes. The forecasts now score the last **250** trading days (about a year) instead of 60: the backend's `time_series_models.evaluation_window_length` setting, now equal to the portfolio backtest's length. `all_forecasts.csv` normally has 251 rows (250 backtest + live) instead of 61. In `all_forecasts_metadata.yml`, values change but keys do not: `evaluation_window.target_trading_days`, and normally `n_evaluated` and `n_directional`, are 250, and the evaluation start dates move back about nine months. The training window, the price download, and the optimization and backtest files are unchanged. The backend now also retrains a cached forecasts file whose rows do not match its settings, so a date folder recomputed after this change cannot keep 60-day forecasts with 250-day metadata. Date folders written before v52 keep 60 scored days unless recomputed. Notes updated: "Small samples" is now "Limited samples", the suggested metrics wording no longer calls the sample modest, and "Not the forecasts' period" says the two evaluations currently cover the same days but are separate settings. Frontend must: not assume about three months of forecasts on the x-axis (check that about four times as many points per ticker still read well); keep filling `{n}` from `target_trading_days`; use the updated metrics wording; and still compare the backtest's and forecasts' lengths and start dates rather than assume they match. |

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from aliciadata_finance_backend.config import ExogenousVariable
 from aliciadata_finance_backend.forecasting.metrics import (
     build_forecast_metadata,
     directional_accuracy,
@@ -209,4 +210,118 @@ def test_forecast_metadata_yaml_round_trip(tmp_path):
     # Dates load as strings and numbers as plain floats, not numpy tags.
     assert isinstance(loaded["forecast_window"]["forecast_date"], str)
     assert isinstance(loaded["ticker_metrics"]["aaa"]["arima"]["rmse"], float)
+    assert "!!python" not in path.read_text()
+
+
+# ARIMAX: its own errors, and comparisons with naive and ARIMA on the same days
+
+SPX = ExogenousVariable(symbol="I:SPX", source="massive", transform="log_return", lag=1)
+
+
+def arimax_table() -> pd.DataFrame:
+    """
+    standard_table() plus T_arimax: huge errors on the 2 old rows (outside
+    the last 20), 100.25 on the 20 scored rows (error +0.25, predicts a fall
+    from 101, as happened), and a live forecast.
+    """
+    table = standard_table()
+    table["AAA_arimax"] = [300.0, 300.0] + [100.25] * 20 + [100.6]
+    return table
+
+
+def test_arimax_metrics_by_hand():
+    m = ticker_metrics(arimax_table(), "AAA", eval_days=20)["arimax"]
+    assert m["n_evaluated"] == 20
+    assert m["mae"] == pytest.approx(0.25)
+    assert m["rmse"] == pytest.approx(0.25)
+    assert m["mape"] == pytest.approx(0.25)
+    assert m["directional_accuracy"] == 1.0
+    assert m["n_directional"] == 20
+    # ARIMAX MAE 0.25 against naive 1.0 and ARIMA 0.5.
+    assert m["vs_naive"]["relative_mae"] == pytest.approx(0.25)
+    assert m["vs_naive"]["skill"] == pytest.approx(0.75)
+    assert m["vs_arima"]["relative_mae"] == pytest.approx(0.5)
+    assert m["vs_arima"]["skill"] == pytest.approx(0.5)
+
+
+def test_arima_and_naive_metrics_do_not_change_with_arimax():
+    with_arimax = ticker_metrics(arimax_table(), "AAA", eval_days=20)
+    without = ticker_metrics(standard_table(), "AAA", eval_days=20)
+    assert "arimax" not in without
+    assert {k: v for k, v in with_arimax.items() if k != "arimax"} == without
+
+
+def test_rows_missing_only_arimax_are_skipped_for_arimax_only():
+    table = arimax_table()
+    table.iloc[5, table.columns.get_loc("AAA_arimax")] = np.nan  # A scored row.
+    m = ticker_metrics(table, "AAA", eval_days=20)
+    assert m["n_evaluated"] == 20  # ARIMA and naive keep every day.
+    assert m["arimax"]["n_evaluated"] == 19
+    assert m["arimax"]["vs_naive"]["relative_mae"] == pytest.approx(0.25)
+
+
+def test_arimax_comparisons_use_arimaxs_days_for_every_model():
+    # On the day ARIMAX is missing, ARIMA's error is made huge: it must not
+    # reach vs_arima, which compares ARIMA on ARIMAX's 19 days only.
+    table = arimax_table()
+    row = table.index[5]
+    table.loc[row, "AAA_arimax"] = np.nan
+    table.loc[row, "AAA_arima"] = 150.0
+    m = ticker_metrics(table, "AAA", eval_days=20)
+    assert m["arimax"]["vs_arima"]["relative_mae"] == pytest.approx(0.5)
+    assert m["relative_mae"] != pytest.approx(0.5)  # ARIMA's own block saw it.
+
+
+def test_arimax_against_a_perfect_arima_has_no_ratio():
+    table = arimax_table()
+    table["AAA_arima"] = table["AAA"]
+    m = ticker_metrics(table, "AAA", eval_days=20)["arimax"]
+    assert m["vs_arima"] == {"relative_mae": None, "skill": None}
+    assert m["vs_naive"]["relative_mae"] == pytest.approx(0.25)
+
+
+def test_models_block_describes_arimax_only_when_it_has_regressors():
+    table = arimax_table()
+    args = (table, ["AAA"], table.index[1], table.index[-2])
+    without = build_forecast_metadata(*args, eval_days=20, training_window_returns=251)
+    assert "arimax" not in without["models"]
+    meta = build_forecast_metadata(
+        *args, eval_days=20, training_window_returns=251, exogenous_variables=(SPX,)
+    )
+    arimax = meta["models"]["arimax"]
+    assert arimax["d"] == 1
+    assert arimax["p_values"] == [0, 1]
+    assert arimax["q_values"] == [0, 1]
+    assert arimax["excluded_orders"] == []  # (0, 0) is a candidate.
+    assert arimax["fit_returns"] == 250  # One return fewer, for the lag.
+    assert arimax["exogenous_variables"] == [
+        {
+            "symbol": "I:SPX",
+            "source": "massive",
+            "transform": "log_return",
+            "lag_sessions": 1,
+        }
+    ]
+    assert meta["ticker_metrics"]["aaa"]["arimax"]["n_evaluated"] == 20
+    # The ARIMA description is unchanged.
+    assert meta["models"]["arima"] == without["models"]["arima"]
+
+
+def test_arimax_metadata_yaml_round_trip(tmp_path):
+    table = arimax_table()
+    meta = build_forecast_metadata(
+        table,
+        ["AAA"],
+        table.index[1],
+        table.index[-2],
+        eval_days=20,
+        training_window_returns=251,
+        exogenous_variables=(SPX,),
+    )
+    path = tmp_path / "all_forecasts_metadata.yml"
+    write_forecast_metadata(meta, str(path))
+    loaded = yaml.safe_load(path.read_text())
+    assert loaded == meta
+    arimax = loaded["ticker_metrics"]["aaa"]["arimax"]
+    assert isinstance(arimax["vs_arima"]["skill"], float)
     assert "!!python" not in path.read_text()

@@ -61,9 +61,8 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
    lagged exogenous regressors,       full optimization run, invariant checks,
    ARIMAX fits, order by BIC          .h5 and .yml writers, file cross-check
  forecasting/metrics.py             optimization/backtest.py
-   accuracy vs. naive, .yml writer
-                                      walk-forward max Sharpe vs. equal weight,
-                                      invariant checks, .csv and .yml writers,
+   accuracy vs. naive (ARIMAX also    walk-forward max Sharpe vs. equal weight,
+   vs. ARIMA), .yml writer            invariant checks, .csv and .yml writers,
                                       cross-checks of its files with the
                                       optimization's files
         │                                │
@@ -208,7 +207,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/arima_models.py`               | Trains ARIMA models on price data.                                                                                                                      | No                                   |
 | `forecasting/arimax_models.py`              | ARIMAX: lines the exogenous variables up with a training window, transformed and lagged (`build_arimax_window()`), and fits a regression with ARMA errors for every candidate order, including (0, 0), choosing the lowest BIC (`ArimaxModels`). | No |
 | `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA and ARIMAX training over rolling windows, in one worker pool; `load_or_train_forecasts` caches the result, and retrains a cached file whose rows do not match the data and settings, or that has no ARIMAX columns (`cached_forecasts_match`).                                      | No                                   |
-| `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
+| `forecasting/metrics.py`                    | Accuracy of the ARIMA, ARIMAX, and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy; ARIMAX compared with both naive and ARIMA on the same days) for `all_forecasts_metadata.yml`. | No |
 | `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. macOS and Linux only: on Windows nothing is measured. | No |
 | `pipeline.py`                               | Orchestrates one backend run, including downloading the exogenous variables with the tickers and checking them (`load_exogenous()`), and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |

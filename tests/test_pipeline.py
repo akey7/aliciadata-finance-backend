@@ -1186,3 +1186,23 @@ def test_cached_forecasts_without_arimax_are_retrained(upload_env, deps):
     assert len(trainer.calls) == 1
     forecasts = pd.read_csv(second.forecasts_path, index_col="pred_date")
     assert all(f"{t}_arimax" in forecasts.columns for t in SYNTHETIC_TICKERS)
+
+
+def test_forecasts_metadata_scores_arimax_against_naive_and_arima(upload_env, deps):
+    _, _, _, kwargs = deps
+    meta = load_forecasts_metadata(run_pipeline(**kwargs))
+    model = meta["models"]["arimax"]
+    assert [v["symbol"] for v in model["exogenous_variables"]] == list(EXOGENOUS_SYMBOLS)
+    assert model["fit_returns"] == TRAINING_WINDOW_RETURNS - 1
+    for metrics in meta["ticker_metrics"].values():
+        arimax = metrics["arimax"]
+        assert arimax["n_evaluated"] == EVALUATION_DAYS
+        assert arimax["vs_naive"]["relative_mae"] == pytest.approx(
+            arimax["mae"] / metrics["naive"]["mae"]
+        )
+        assert arimax["vs_arima"]["relative_mae"] == pytest.approx(
+            arimax["mae"] / metrics["arima"]["mae"]
+        )
+        assert arimax["vs_arima"]["skill"] == pytest.approx(
+            1 - arimax["vs_arima"]["relative_mae"]
+        )

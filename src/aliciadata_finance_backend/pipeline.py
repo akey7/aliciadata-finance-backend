@@ -620,6 +620,7 @@ def run_pipeline(
                 window_end,
                 eval_days=ts_config.evaluation_window_length,
                 training_window_returns=ts_config.training_window_returns,
+                exogenous_variables=exogenous_variables,
             ),
             computed_at,
         ),
