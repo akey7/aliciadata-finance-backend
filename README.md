@@ -7,9 +7,9 @@ AliciaData Finance Backend is the analytical backend for an [interactive dashboa
 The project implements two quantitative workflows:
 
 - **Portfolio optimization:** constrained mean-variance optimization, minimum-variance and maximum-Sharpe portfolios, efficient-frontier construction, and Monte Carlo portfolio simulation, with a walk-forward out-of-sample backtest of the maximum-Sharpe portfolio against an equal-weight baseline.
-- **Time-series forecasting:** ARIMA models fit to rolling historical windows and evaluated using walk-forward out-of-sample forecasts against a naive benchmark. Forecast performance is quantified with RMSE, MAE, MAPE, relative MAE, forecast skill, and directional accuracy.
+- **Time-series forecasting:** ARIMA models, and ARIMAX models that add the previous day's S&P 500 return as a regressor, fit to rolling historical windows and evaluated using walk-forward out-of-sample forecasts against a naive benchmark and against each other. Forecast performance is quantified with RMSE, MAE, MAPE, relative MAE, forecast skill, and directional accuracy.
 
-The backend retrieves market data, performs modeling and validation, records reproducible dated outputs, and publishes completed results to object storage consumed by a separately deployed frontend. Model configuration is explicitly validated, computationally expensive forecasts are cached, independent ARIMA fits can execute in parallel, and results are uploaded only after the analytical pipeline succeeds.
+The backend retrieves market data, performs modeling and validation, records reproducible dated outputs, and publishes completed results to object storage consumed by a separately deployed frontend. Model configuration is explicitly validated, computationally expensive forecasts are cached, independent model fits can execute in parallel, and results are uploaded only after the analytical pipeline succeeds.
 
 This project is intended both as a quantitative-methods demonstration and as an example of turning statistical analysis into a reproducible analytical system.
 
