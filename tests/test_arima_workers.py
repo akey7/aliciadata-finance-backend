@@ -3,9 +3,10 @@ Tests for how ARIMA training is spread over worker processes in
 aliciadata_finance_backend.forecasting.ticker_predict: the default worker count,
 the single-thread environment for workers, and fit_windows().
 
-One test starts a real pool of 2 worker processes and fits the real
-statsmodels ARIMA on one-year synthetic windows, so it takes a few seconds
-while the workers import their libraries. In-memory only.
+Two tests start a real pool of 2 worker processes and fit the real
+statsmodels ARIMA (and, in one, ARIMAX) on one-year synthetic windows, so
+they take a few seconds while the workers import their libraries. In-memory
+only.
 """
 
 import os
@@ -14,8 +15,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from aliciadata_finance_backend.config import ExogenousVariable
 from aliciadata_finance_backend.data.date_manager import DateManager
 from aliciadata_finance_backend.forecasting import ticker_predict
+from aliciadata_finance_backend.forecasting.arimax_models import build_arimax_window
 from aliciadata_finance_backend.forecasting.ticker_predict import (
     SINGLE_THREAD_ENV_VARS,
     default_worker_count,
@@ -98,4 +101,24 @@ def test_pool_gives_the_same_results_in_the_same_order_as_one_process():
         assert date_2 == date_1
         assert order_2 == order_1
         assert tie_2 == tie_1
+        assert pred_2 == pytest.approx(pred_1, rel=1e-9)
+
+
+def test_pool_fits_mixed_arima_and_arimax_windows_like_one_process():
+    # ARIMAX windows must survive the trip to a worker process (pickling)
+    # and give the same results there.
+    spx = ExogenousVariable(
+        symbol="I:SPX", source="massive", transform="log_return", lag=1
+    )
+    prices = synthetic_windows(n_windows=2)
+    index_levels = synthetic_windows(n_windows=3)[2].rename("I:SPX").to_frame()
+    windows = prices + [build_arimax_window(ts, index_levels, (spx,)) for ts in prices]
+    in_process = fit_windows(windows, max_p=2, max_q=2, n_workers=1)
+    pooled = fit_windows(windows, max_p=2, max_q=2, n_workers=2)
+    assert len(pooled) == len(windows) == 4
+    for (date_1, pred_1, order_1, _), (date_2, pred_2, order_2, _) in zip(
+        in_process, pooled
+    ):
+        assert date_2 == date_1
+        assert order_2 == order_1
         assert pred_2 == pytest.approx(pred_1, rel=1e-9)

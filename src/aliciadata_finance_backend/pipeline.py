@@ -21,10 +21,12 @@ Order of operations:
    index) are downloaded with the tickers over the same range, cached apart
    from them in input/exogenous/, cut off at the as-of date the same way, and
    checked against the sessions the forecasts use (load_exogenous()).
-2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
-   cached as output/time_series/<as-of date>/all_forecasts.csv (a cached CSV
-   whose rows do not match the data and settings is retrained). Metrics on
-   those forecasts are written next to it as all_forecasts_metadata.yml.
+2. ARIMA and ARIMAX (regressed on the lagged exogenous variables): trained
+   on the last TimeSeriesConfig.arima_window_sessions of that data, cached as
+   output/time_series/<as-of date>/all_forecasts.csv (a cached CSV whose rows
+   do not match the data and settings, or that has no ARIMAX forecasts, is
+   retrained). Metrics on those forecasts are written next to it as
+   all_forecasts_metadata.yml.
 3. Optimization: on the last PortfolioBacktestConfig.training_window_closes
    sessions, with the last DTB3 rate dated before the as-of date, written to
    output/portfolio_optimization/<as-of date>/. Its invariants are checked
@@ -53,6 +55,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 import pandas as pd
 from aliciadata_finance_backend.config import (
+    ExogenousVariable,
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
@@ -72,6 +75,8 @@ from aliciadata_finance_backend.data.ticker_download_manager import (
     TickerDownloadManager,
 )
 from aliciadata_finance_backend.forecasting.ticker_predict import (
+    ARIMA_SUFFIX,
+    ARIMAX_SUFFIX,
     ArimaWalkForward,
     ForecastTrainer,
     load_or_train_forecasts,
@@ -406,7 +411,7 @@ def run_pipeline(
     as_of_date: pd.Timestamp | None = None,
     cache_date: str | None = None,
     computed_at: str | None = None,
-    exogenous_symbols: tuple[str, ...],
+    exogenous_variables: tuple[ExogenousVariable, ...],
 ) -> PipelineResult:
     """
     Run the whole backend: prices, ARIMA forecasts, portfolio optimization,
@@ -491,10 +496,12 @@ def run_pipeline(
         Defaults to None, the current UTC time when the run starts, as
         YYYY-MM-DDTHH:MM:SSZ; tests pass a fixed value.
 
-    exogenous_symbols : tuple[str, ...]
-        The exogenous variables' symbols from the configuration file
-        (ModelingConfig.exogenous_symbols). Downloaded with the tickers and
-        checked by load_exogenous(). Required, like ts_config.
+    exogenous_variables : tuple[ExogenousVariable, ...]
+        The ARIMAX regressors from the configuration file
+        (ModelingConfig.exogenous_variables). Their values are downloaded
+        with the tickers and checked by load_exogenous(), then passed to the
+        trainer, which forecasts with ARIMAX next to ARIMA. Required, like
+        ts_config.
 
     Returns
     -------
@@ -558,29 +565,30 @@ def run_pipeline(
     _check_as_of_is_a_session(wide_df, as_of_date)
     print(f"Loaded data from {start_date} to {end_date}")
     # 1b. Exogenous variables (the ARIMAX regressors), downloaded with the
-    # tickers over the same range and cut off at the as-of date like them.
-    # They are checked here, against the sessions the forecasts use; the
-    # ARIMAX forecasts that use them come in a later step.
-    load_exogenous(
+    # tickers over the same range, cut off at the as-of date like them, and
+    # checked against the sessions the forecasts use.
+    arima_window_df = last_n_sessions(wide_df, arima_sessions)
+    exogenous_df = load_exogenous(
         tdm,
-        exogenous_symbols,
+        tuple(v.symbol for v in exogenous_variables),
         days_in_past=n_requested,
         refresh_data=refresh_data,
         as_of_date=as_of_date,
-        sessions=last_n_sessions(wide_df, arima_sessions).index,
+        sessions=arima_window_df.index,
     )
     as_of = as_of_date_str(wide_df.index)
     print(f"Results will be stored under {as_of}/")
 
-    # 2. ARIMA forecasts (cached per as-of date)
+    # 2. ARIMA and ARIMAX forecasts (cached per as-of date). A cached CSV
+    # without ARIMAX forecasts is retrained.
     forecasts_path = local_output_path(
         TIME_SERIES, as_of, ALL_FORECASTS_FILENAME, output_root
     )
-    arima_window_df = last_n_sessions(wide_df, arima_sessions)
     if trainer is None:
         trainer = ArimaWalkForward(
             training_window_returns=ts_config.training_window_returns,
             n_workers=arima_workers,
+            exogenous_variables=exogenous_variables,
         )
     trained_arima = load_or_train_forecasts(
         arima_window_df,
@@ -588,6 +596,8 @@ def run_pipeline(
         retrain=retrain_arima,
         trainer=trainer,
         training_window_returns=ts_config.training_window_returns,
+        exogenous_df=exogenous_df,
+        model_suffixes=(ARIMA_SUFFIX, ARIMAX_SUFFIX),
     )
 
     # 2b. Forecast metrics, from the CSV exactly as written (also for cached

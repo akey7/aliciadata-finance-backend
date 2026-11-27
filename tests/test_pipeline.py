@@ -19,6 +19,7 @@ from conftest import SYNTHETIC_TICKERS, make_long_prices
 from aliciadata_finance_backend import pipeline
 from aliciadata_finance_backend.optimization.workflow import InvariantError
 from aliciadata_finance_backend.config import (
+    ExogenousVariable,
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
     TimeSeriesConfig,
@@ -40,10 +41,14 @@ from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
 BUCKET = "test-bucket"
 COMPUTED_AT = "2026-11-14T12:00:00Z"
-EXOGENOUS_SYMBOLS = ("I:SPX",)
+EXOGENOUS_VARIABLES = (
+    ExogenousVariable(symbol="I:SPX", source="massive", transform="log_return", lag=1),
+)
+EXOGENOUS_SYMBOLS = tuple(v.symbol for v in EXOGENOUS_VARIABLES)
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
+STUB_ARIMAX_UPLIFT = 0.99  # Fake ARIMAX forecast = 1 % below it.
 # A representative configuration (252 closes, 20 scored days). The tests do
 # not depend on the values in config/modeling_and_optimization.yml.
 TS_CONFIG = TimeSeriesConfig(training_window_length=252, evaluation_window_length=20)
@@ -153,8 +158,10 @@ def exogenous_values(
 class FakeTrainer:
     """
     Produces a forecasts table shaped like ArimaWalkForward's: one row per
-    window end's next session plus the live row, with T_arima, T_naive (the
-    previous close) and T (the actual, empty on the live row).
+    window end's next session plus the live row, with T_arima, T_arimax,
+    T_naive (the previous close) and T (the actual, empty on the live row).
+    Records the prices of every call in calls and its exogenous values in
+    exogenous_calls.
     """
 
     def __init__(
@@ -163,9 +170,13 @@ class FakeTrainer:
         self.fail = fail
         self.training_window_returns = training_window_returns
         self.calls: list[pd.DataFrame] = []
+        self.exogenous_calls: list[pd.DataFrame | None] = []
 
-    def train_arima_models(self, df: pd.DataFrame) -> pd.DataFrame:
+    def train_arima_models(
+        self, df: pd.DataFrame, exogenous_df: pd.DataFrame | None = None
+    ) -> pd.DataFrame:
         self.calls.append(df)
+        self.exogenous_calls.append(exogenous_df)
         if self.fail:
             raise RuntimeError("ARIMA failed")
         n = self.training_window_returns
@@ -177,6 +188,7 @@ class FakeTrainer:
         for t in df.columns:
             naive = df.loc[window_ends, t].to_numpy()
             out[f"{t}_arima"] = STUB_UPLIFT * naive
+            out[f"{t}_arimax"] = STUB_ARIMAX_UPLIFT * naive
             out[f"{t}_naive"] = naive
             out[t] = df[t].reindex(out.index).to_numpy()
         return out
@@ -218,7 +230,7 @@ def deps(tmp_path):
         bt_config=BT_CONFIG,
         # Fixed, so files from two runs can be compared byte for byte.
         computed_at=COMPUTED_AT,
-        exogenous_symbols=EXOGENOUS_SYMBOLS,
+        exogenous_variables=EXOGENOUS_VARIABLES,
     )
     return tdm, trainer, uploader, kwargs
 
@@ -1140,3 +1152,37 @@ def test_exogenous_values_after_a_past_as_of_date_are_ignored(deps):
     result = run_pipeline(upload=False, **kwargs, as_of_date=as_of)
     assert result.as_of == as_of.strftime("%Y-%m-%d")
     assert [call["use_cache"] for call in tdm.exogenous_calls] == [True]
+
+
+# ARIMAX: the exogenous values reach the trainer, and the cache needs ARIMAX
+
+
+def test_trainer_gets_the_exogenous_values_through_the_as_of_date(deps):
+    _, trainer, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    kwargs["tdm"] = FakeTickerDownloadManager(long_df)
+    run_pipeline(upload=False, **kwargs, as_of_date=as_of)
+    (window,) = trainer.calls
+    (exogenous,) = trainer.exogenous_calls
+    assert list(exogenous.columns) == list(EXOGENOUS_SYMBOLS)
+    # Every session the forecasts use has its value, and none after the
+    # as-of date reaches the trainer.
+    assert window.index.isin(exogenous.index).all()
+    assert exogenous.index.max().normalize() == as_of.normalize()
+
+
+def test_cached_forecasts_without_arimax_are_retrained(upload_env, deps):
+    # A CSV written before ARIMAX existed must not be reused, or the uploaded
+    # forecasts would lack the ARIMAX columns.
+    _, trainer, _, kwargs = deps
+    first = run_pipeline(**kwargs)
+    old = pd.read_csv(first.forecasts_path, index_col="pred_date")
+    old.drop(columns=[c for c in old.columns if c.endswith("_arimax")]).to_csv(
+        first.forecasts_path
+    )
+    trainer.calls.clear()
+    second = run_pipeline(**kwargs)
+    assert second.trained_arima is True
+    assert len(trainer.calls) == 1
+    forecasts = pd.read_csv(second.forecasts_path, index_col="pred_date")
+    assert all(f"{t}_arimax" in forecasts.columns for t in SYNTHETIC_TICKERS)

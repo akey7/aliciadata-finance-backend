@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from aliciadata_finance_backend.config import TimeSeriesConfig
+from aliciadata_finance_backend.config import ExogenousVariable, TimeSeriesConfig
 from aliciadata_finance_backend.data.date_manager import DateManager, nyse_holidays
 from aliciadata_finance_backend.forecasting import ticker_predict
 from aliciadata_finance_backend.forecasting.arima_models import ArimaModels
@@ -52,11 +52,37 @@ class StubArimaModels:
         return pred_date, STUB_UPLIFT * float(original_ts.dropna().iloc[-1]), order
 
 
+STUB_ARIMAX_UPLIFT = 0.98  # Stub ARIMAX forecast = 2 % below the last close.
+
+
+class StubArimaxModels:
+    """
+    Like StubArimaModels, for ARIMAX: real pred_date logic, a dummy
+    forecast (STUB_ARIMAX_UPLIFT x the last close), and order (0, 0), which
+    ARIMA never has. Records every ArimaxWindow passed to fit_arimax() in
+    StubArimaxModels.fitted.
+    """
+
+    fitted: list = []
+
+    def __init__(self):
+        self._dates = ArimaModels()
+        self.order_tie_broken = False
+
+    def fit_arimax(self, window, max_p=2, max_q=2):
+        StubArimaxModels.fitted.append(window)
+        prices = window.prices
+        pred_date = self._dates.next_trading_day(prices.index[-1])
+        return pred_date, STUB_ARIMAX_UPLIFT * float(prices.iloc[-1]), (0, 0)
+
+
 @pytest.fixture(autouse=True)
 def stub_arima(monkeypatch):
     StubArimaModels.fitted = []
     StubArimaModels.orders = []
+    StubArimaxModels.fitted = []
     monkeypatch.setattr(ticker_predict, "ArimaModels", StubArimaModels)
+    monkeypatch.setattr(ticker_predict, "ArimaxModels", StubArimaxModels)
     # Worker processes would import the real ArimaModels, not the stub.
     monkeypatch.setattr(ticker_predict, "default_worker_count", lambda: 1)
 
@@ -637,3 +663,162 @@ def test_all_windows_are_fit_in_one_call_in_output_order(recorded_workers):
         fitted = forecasts[f"{ticker}_arima"].dropna()
         naive = forecasts.loc[fitted.index, f"{ticker}_naive"]
         np.testing.assert_allclose(fitted, STUB_UPLIFT * naive)
+
+
+# ARIMAX next to ARIMA: T_arimax and its order columns
+
+SPX = ExogenousVariable(symbol="I:SPX", source="massive", transform="log_return", lag=1)
+
+
+class ArimaxWalkForward(ArimaWalkForward):
+    def __init__(self, n_workers: int | None = None):
+        super().__init__(
+            training_window_returns=SHORT_WINDOW_RETURNS,
+            n_workers=n_workers,
+            exogenous_variables=(SPX,),
+        )
+
+
+def spx_levels(prices: pd.DataFrame) -> pd.DataFrame:
+    """Index levels on the same sessions (and 17:00 labels) as prices."""
+    rng = np.random.default_rng(1)
+    return pd.DataFrame(
+        {"I:SPX": 5000 * np.exp(np.cumsum(rng.normal(0, 0.01, len(prices))))},
+        index=prices.index,
+    )
+
+
+def test_arimax_columns_follow_the_arima_columns():
+    prices = nyse_prices("2026-04-02")
+    forecasts = ArimaxWalkForward().train_arima_models(prices, spx_levels(prices))
+    assert list(forecasts.columns) == [
+        "AAA_arima", "AAA_arima_p", "AAA_arima_d", "AAA_arima_q",
+        "AAA_arimax", "AAA_arimax_p", "AAA_arimax_d", "AAA_arimax_q",
+        "AAA_naive", "AAA",
+        "BBB_arima", "BBB_arima_p", "BBB_arima_d", "BBB_arima_q",
+        "BBB_arimax", "BBB_arimax_p", "BBB_arimax_d", "BBB_arimax_q",
+        "BBB_naive", "BBB",
+    ]
+
+
+def test_arimax_forecasts_and_orders_fill_every_row():
+    prices = nyse_prices("2026-04-02")
+    forecasts = ArimaxWalkForward().train_arima_models(prices, spx_levels(prices))
+    for ticker in ("AAA", "BBB"):
+        np.testing.assert_allclose(
+            forecasts[f"{ticker}_arimax"], STUB_ARIMAX_UPLIFT * forecasts[f"{ticker}_naive"]
+        )
+        for column, value in (("_arimax_p", 0), ("_arimax_d", 1), ("_arimax_q", 0)):
+            assert pd.api.types.is_integer_dtype(forecasts[ticker + column])
+            assert (forecasts[ticker + column] == value).all()
+        # ARIMA is unchanged by ARIMAX.
+        np.testing.assert_allclose(
+            forecasts[f"{ticker}_arima"], STUB_UPLIFT * forecasts[f"{ticker}_naive"]
+        )
+
+
+def test_arimax_sees_the_same_closes_and_no_later_index_value():
+    prices = nyse_prices("2026-04-02")
+    ArimaxWalkForward().train_arima_models(prices, spx_levels(prices))
+    arima_windows = StubArimaModels.fitted
+    arimax_windows = StubArimaxModels.fitted
+    assert len(arimax_windows) == len(arima_windows) == 2 * (40 - SHORT_WINDOW_RETURNS)
+    for ts, window in zip(arima_windows, arimax_windows):
+        pd.testing.assert_series_equal(window.prices, ts)
+        assert window.regressors.index.max() == ts.index[-1]
+        # One log return fewer than ARIMA's window, for the lag.
+        assert len(window.regressors) == SHORT_WINDOW_RETURNS - 1
+
+
+def test_without_exogenous_variables_there_are_no_arimax_columns():
+    prices = nyse_prices("2026-04-02")
+    forecasts = ShortWindowWalkForward().train_arima_models(prices, spx_levels(prices))
+    assert not [c for c in forecasts.columns if "_arimax" in c]
+    assert StubArimaxModels.fitted == []
+
+
+def test_arimax_needs_the_exogenous_values():
+    with pytest.raises(ValueError, match="exogenous variables' values"):
+        ArimaxWalkForward().train_arima_models(nyse_prices("2026-04-02"))
+
+
+def test_missing_index_value_at_the_origin_leaves_only_arimax_empty():
+    prices = nyse_prices("2026-04-02")
+    levels = spx_levels(prices)
+    levels.loc[GAP, "I:SPX"] = np.nan  # The index is missing on GAP only.
+    forecasts = ArimaxWalkForward().train_arima_models(prices, levels)
+    # The windows ending on GAP and on the session after it need the index's
+    # return on that session, so their rows have no ARIMAX forecast.
+    empty_rows = [AFTER_GAP, pd.Timestamp("2026-03-12 17:00")]
+    for ticker in ("AAA", "BBB"):
+        for row in empty_rows:
+            assert pd.isna(forecasts.loc[row, f"{ticker}_arimax"])
+            assert pd.isna(forecasts.loc[row, f"{ticker}_arimax_p"])
+            assert np.isfinite(forecasts.loc[row, f"{ticker}_arima"])
+        others = forecasts.drop(index=empty_rows)
+        assert others[f"{ticker}_arimax"].notna().all()
+        assert others[f"{ticker}_arimax_d"].notna().all()
+
+
+def test_missing_close_at_the_origin_leaves_arima_and_arimax_empty():
+    prices = nyse_prices("2026-04-02")
+    prices.loc[GAP, "AAA"] = np.nan
+    forecasts = ArimaxWalkForward().train_arima_models(prices, spx_levels(prices))
+    assert pd.isna(forecasts.loc[AFTER_GAP, "AAA_arima"])
+    assert pd.isna(forecasts.loc[AFTER_GAP, "AAA_arimax"])
+    assert pd.isna(forecasts.loc[AFTER_GAP, "AAA_arimax_q"])
+    assert np.isfinite(forecasts.loc[AFTER_GAP, "BBB_arimax"])
+    assert all(pd.notna(w.prices.iloc[-1]) for w in StubArimaxModels.fitted)
+
+
+def test_arima_and_arimax_share_one_pool(recorded_workers):
+    prices = nyse_prices("2026-04-02")
+    ArimaxWalkForward(n_workers=3).train_arima_models(prices, spx_levels(prices))
+    assert recorded_workers == [3]
+
+
+def test_arimax_columns_survive_csv_and_keep_the_suffix_rules(tmp_path):
+    prices = nyse_prices("2026-04-02")
+    path = str(tmp_path / "all_forecasts.csv")
+    ticker_predict.load_or_train_forecasts(
+        prices,
+        path,
+        trainer=ArimaxWalkForward(),
+        training_window_returns=SHORT_WINDOW_RETURNS,
+        exogenous_df=spx_levels(prices),
+        model_suffixes=(ticker_predict.ARIMA_SUFFIX, ticker_predict.ARIMAX_SUFFIX),
+    )
+    loaded = read_forecasts(path)
+    assert pd.api.types.is_integer_dtype(loaded["AAA_arimax_p"])
+    # Exact suffixes still tell the forecast columns apart.
+    assert [c for c in loaded.columns if c.endswith("_arima")] == ["AAA_arima", "BBB_arima"]
+    assert [c for c in loaded.columns if c.endswith("_arimax")] == ["AAA_arimax", "BBB_arimax"]
+    assert [c for c in loaded.columns if c.endswith("_arima_p")] == ["AAA_arima_p", "BBB_arima_p"]
+
+
+def test_cache_without_arimax_does_not_match_when_arimax_is_required():
+    prices = nyse_prices("2026-04-02")
+    arima_only = ShortWindowWalkForward().train_arima_models(prices)
+    both = ArimaxWalkForward().train_arima_models(prices, spx_levels(prices))
+    suffixes = (ticker_predict.ARIMA_SUFFIX, ticker_predict.ARIMAX_SUFFIX)
+    assert ticker_predict.cached_forecasts_match(arima_only, prices, SHORT_WINDOW_RETURNS)
+    assert not ticker_predict.cached_forecasts_match(
+        arima_only, prices, SHORT_WINDOW_RETURNS, suffixes
+    )
+    assert ticker_predict.cached_forecasts_match(both, prices, SHORT_WINDOW_RETURNS, suffixes)
+
+
+def test_cache_without_arimax_is_retrained(tmp_path):
+    prices = nyse_prices("2026-04-02")
+    path = str(tmp_path / "all_forecasts.csv")
+    ShortWindowWalkForward().train_arima_models(prices).to_csv(path)
+    retrained = ticker_predict.load_or_train_forecasts(
+        prices,
+        path,
+        trainer=ArimaxWalkForward(),
+        training_window_returns=SHORT_WINDOW_RETURNS,
+        exogenous_df=spx_levels(prices),
+        model_suffixes=(ticker_predict.ARIMA_SUFFIX, ticker_predict.ARIMAX_SUFFIX),
+    )
+    assert retrained is True
+    assert "AAA_arimax" in read_forecasts(path).columns

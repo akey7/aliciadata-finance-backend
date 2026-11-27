@@ -206,7 +206,7 @@ def run_one(args: argparse.Namespace, config: ModelingConfig) -> None:
         ts_config=config.time_series_models,
         po_config=config.portfolio_optimization,
         bt_config=config.portfolio_backtest,
-        exogenous_symbols=config.exogenous_symbols,
+        exogenous_variables=config.exogenous_variables,
         as_of_date=args.as_of,
         cache_date=args.cache_date,
     )

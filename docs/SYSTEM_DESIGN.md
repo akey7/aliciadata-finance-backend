@@ -57,10 +57,11 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
    worker pool                        portfolio_stats(), feasible sampler
  forecasting/arima_models.py        optimization/portfolio.py  ◄── [FRED: DTB3]
    ARIMA fits, order by BIC           optimizers, risk-free rate (cache in input/)
- forecasting/metrics.py             optimization/workflow.py
-   accuracy vs. naive, .yml writer    full optimization run, invariant checks,
-                                      .h5 and .yml writers, file cross-check
-                                    optimization/backtest.py
+ forecasting/arimax_models.py       optimization/workflow.py
+   lagged exogenous regressors,       full optimization run, invariant checks,
+   ARIMAX fits, order by BIC          .h5 and .yml writers, file cross-check
+ forecasting/metrics.py             optimization/backtest.py
+   accuracy vs. naive, .yml writer
                                       walk-forward max Sharpe vs. equal weight,
                                       invariant checks, .csv and .yml writers,
                                       cross-checks of its files with the
@@ -76,7 +77,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
              [Garage S3 bucket on the VPS]   (files in the next diagram)
 ```
 
-- The two paths run one after the other in a single process. Within the time series path, the ARIMA fits for every ticker and day run at the same time in a pool of worker processes (`--workers`).
+- The two paths run one after the other in a single process. Within the time series path, the ARIMA and ARIMAX fits for every ticker and day run at the same time in one pool of worker processes (`--workers`). ARIMAX fits four candidate orders per window to ARIMA's three, so the time series path takes a little over twice as long as with ARIMA alone.
 - The ARIMA window and the number of scored forecast days, and the optimization's weight cap, plot array lengths, and random seed come from the configuration file (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings)). The optimization uses the backtest's training window length.
 - The optimization has one definition, `PortfolioProblem` in `optimization/problem.py`. Its constraint set is used by every optimizer and by the random portfolios, and its `portfolio_stats()` computes every return, volatility, and Sharpe ratio that is uploaded, so the plot cannot drift from the optimization. `workflow.py` checks the invariants (see its `check_optimization_invariants()`) before the files are written, then reads both written files back and checks that they agree.
 - The backtest (`optimization/backtest.py`) replays past rebalance dates. It passes each `PortfolioProblem` only the closes up to that date, and uses the same optimizer and constraints as the live run, so it evaluates the method the dashboard shows. Its training window, rebalance interval, and scored days come from the configuration file; its scored days are set independently of the forecasts', so the two evaluations can cover different periods ending on the same as-of date. It needs complete prices: a missing close or NYSE session stops the run. Its metadata also records the live optimization as `final_optimization`, without solving it again, and `verify_final_optimization()` checks that record against both optimization files. The last rebalance is one holding period older than the live portfolio, so it differs from it.
@@ -97,7 +98,8 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
  WRITES (local)                                                         UPLOAD
    output/time_series/<as-of>/
      ├── all_forecasts.csv                    ◄── load_or_train_forecasts()      [1]
-     │     (reused if it matches the data and settings, unless --retrain-arima)
+     │     (ARIMA and ARIMAX; reused if it matches the data and settings
+     │      and has ARIMAX columns, unless --retrain-arima)
      └── all_forecasts_metadata.yml           ◄── write_forecast_metadata()      [2]
    output/portfolio_optimization/<as-of>/
      ├── portfolio_optimization_plot_data.h5  ◄── write_plot_data_h5()           [3]
@@ -204,7 +206,8 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `optimization/workflow.py`                  | One full optimization run from prices to annualized results, all from one `PortfolioProblem`: the capital allocation line, the invariant checks (`InvariantError`), the random-portfolio summary, the `.h5` and `.yml` writers, and a read-back check that the two files agree. The `.yml` holds the weights of both the max Sharpe ratio and the minimum variance portfolios, with a comment marking `optimum_portfolio` as the max Sharpe ratio portfolio. | No |
 | `optimization/backtest.py`                  | Walk-forward backtest of the max Sharpe ratio portfolio against equal weights: the rebalance schedule, drifting holdings, wealth and metrics (cumulative return, CAGR, maximum drawdown, annualized volatility), a documented fallback for failed optimizations, the invariant checks (`InvariantError`), the `.csv` and `.yml` writers, and read-back checks that the two files agree and that `final_optimization` matches the optimization's files. | No |
 | `forecasting/arima_models.py`               | Trains ARIMA models on price data.                                                                                                                      | No                                   |
-| `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA training over rolling windows; `load_or_train_forecasts` caches the result, and retrains a cached file whose rows do not match the data and settings (`cached_forecasts_match`).                                      | No                                   |
+| `forecasting/arimax_models.py`              | ARIMAX: lines the exogenous variables up with a training window, transformed and lagged (`build_arimax_window()`), and fits a regression with ARMA errors for every candidate order, including (0, 0), choosing the lowest BIC (`ArimaxModels`). | No |
+| `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA and ARIMAX training over rolling windows, in one worker pool; `load_or_train_forecasts` caches the result, and retrains a cached file whose rows do not match the data and settings, or that has no ARIMAX columns (`cached_forecasts_match`).                                      | No                                   |
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
 | `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. macOS and Linux only: on Windows nothing is measured. | No |
 | `pipeline.py`                               | Orchestrates one backend run, including downloading the exogenous variables with the tickers and checking them (`load_exogenous()`), and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
