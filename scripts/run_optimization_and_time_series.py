@@ -206,6 +206,7 @@ def run_one(args: argparse.Namespace, config: ModelingConfig) -> None:
         ts_config=config.time_series_models,
         po_config=config.portfolio_optimization,
         bt_config=config.portfolio_backtest,
+        exogenous_symbols=config.exogenous_symbols,
         as_of_date=args.as_of,
         cache_date=args.cache_date,
     )
@@ -307,6 +308,7 @@ def run_backfill_mode(args: argparse.Namespace, config: ModelingConfig) -> int:
         refresh_data=args.refresh_data,
         sessions_getter=nyse_sessions_ending,
         risk_free_history_getter=get_risk_free_rate_history,
+        exogenous_symbols=config.exogenous_symbols,
     )
     log_path = backfill_log_path(started)
     results = run_backfill(
@@ -331,6 +333,7 @@ def main() -> None:
     print(f"Using settings from {args.config}: {config.time_series_models}")
     print(f"Using settings from {args.config}: {config.portfolio_optimization}")
     print(f"Using settings from {args.config}: {config.portfolio_backtest}")
+    print(f"Using settings from {args.config}: {config.exogenous_variables}")
     load_dotenv(override=True)
     if args.past_days is not None:
         sys.exit(run_backfill_mode(args, config))

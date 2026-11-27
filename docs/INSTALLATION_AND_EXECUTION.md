@@ -133,9 +133,15 @@ portfolio_backtest:
   training_window_returns: ...     # daily returns per optimization, live and backtest
   evaluation_window_length: ...    # most recent trading days scored by the backtest
   rebalance_interval_sessions: ... # trading sessions between rebalances
+exogenous_variables:               # a list of one or more of:
+  - symbol: ...                    # e.g. I:SPX, the S&P 500 index
+    source: ...                    # massive
+    transform: ...                 # log_return
+    lag: ...                       # 1 (trading sessions)
 ```
 
 - `training_window_length` counts **closing prices**; each window has one fewer daily log return than closes.
+- `exogenous_variables` lists the regressors of the ARIMAX forecasts. Each is downloaded from Massive.com with the tickers, over the same range, and cached apart from them in `input/exogenous/`. Its daily values become a regressor through `transform` (`log_return`: the daily log return), lagged by `lag` sessions, so the forecast for a session uses the variable's value at the previous session's close, already known when the forecast is made. Only these choices are supported for now. A missing session inside the range is reported at the start of the run; a variable with no values at all stops the run before any upload.
 - `time_series_models.evaluation_window_length` is the number of scored forecast days in `all_forecasts.csv` (plus the live forecast) and in the metrics of `all_forecasts_metadata.yml`. Each scored day needs one ARIMA fit per ticker and candidate order, so the ARIMA run time grows in proportion to it plus one. After changing it, cached forecasts are retrained automatically, because their rows no longer match; after changing `training_window_length`, run with `--retrain-arima`.
 - `portfolio_backtest.evaluation_window_length` is the number of days the portfolio backtest scores. The two `evaluation_window_length` settings are independent: both evaluations end on the as-of date, but they can start on different dates.
 - Every key is required, and unknown keys are rejected, so a typo stops the run before any download instead of silently using a default.

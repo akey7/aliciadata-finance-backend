@@ -41,10 +41,13 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
    ├─ memory_usage.py                             peak memory, printed after the run
    └─ pipeline.py                                 runs the steps below
         │
- [Massive.com API] ──► 1. PRICES
-                         data/ticker_download_manager.py   download, cache in input/annual/
+ [Massive.com API] ──► 1. PRICES AND EXOGENOUS VARIABLES
+                         data/ticker_download_manager.py   download; tickers cached in input/annual/,
+                                                           exogenous variables in input/exogenous/
                          data/date_manager.py              NYSE trading calendar
-                         data/prices.py                    wide price table, cut off at the as-of date, recent sessions
+                         data/prices.py                    wide price table, cut off at the as-of date, recent sessions,
+                                                           exogenous gaps
+                         pipeline.py, load_exogenous()     exogenous values checked against the forecasts' sessions
         │
         ├────────────────────────────────┐   (run in order: 2, then 3)
         ▼                                ▼
@@ -87,6 +90,7 @@ One run of `scripts/run_optimization_and_time_series.py` downloads prices, then 
  READS
    config/modeling_and_optimization.yml     load_config()
    input/annual/Tickers YYYY-MM-DD.csv      price cache, reused for the run date
+   input/exogenous/Exogenous YYYY-MM-DD.csv   exogenous variables' cache (e.g. I:SPX), reused for the run date
    input/Risk Free Rate History YYYY-MM-DD.csv   T-bill cache, reused for the run date
         │
         ▼
@@ -152,7 +156,9 @@ The backend uses the following folders. You don't need to create them: the scrip
 
 2. `input/annual/`: Holds the cached price downloads (one file per run date), long enough for the optimization, the ARIMA forecasts, and the backtest. ARIMA uses the last training window plus its scored forecast days, the portfolio backtest its own training window plus its own scored days, and the optimization the last of the backtest's training windows (see "Model settings" in [INSTALLATION_AND_EXECUTION.md](INSTALLATION_AND_EXECUTION.md#model-settings) for where those lengths are set). A cached file that is too short, for example one written before the ARIMA window grew, is downloaded again automatically.
 
-3. `output/`: Holds the results of runs, in one folder per data as-of date (the last NYSE trading day in the run's data). Subfolders are created automatically. The layout mirrors the frontend buckets, where each file's key is its path below `output/<kind>/`:
+3. `input/exogenous/`: Holds the cached downloads of the exogenous variables (one file per run date, `Exogenous YYYY-MM-DD.csv`): the regressors of the ARIMAX forecasts, such as the S&P 500 index (`I:SPX`), listed under `exogenous_variables` in `config/modeling_and_optimization.yml`. They are downloaded with the tickers, over the same range, but kept apart from the tickers being modeled, in the same long format (the symbol in the `ticker` column, its value in `close`). Like the prices, they are cut off at a run's as-of date. A cached file that lacks a configured variable, or starts after the sessions the forecasts use, is downloaded again automatically; a session missing inside the range is reported, and a variable with no value at all fails the run.
+
+4. `output/`: Holds the results of runs, in one folder per data as-of date (the last NYSE trading day in the run's data). Subfolders are created automatically. The layout mirrors the frontend buckets, where each file's key is its path below `output/<kind>/`:
 
    ```
    output/portfolio_optimization/YYYY-MM-DD/optimization_metadata.yml
@@ -188,11 +194,11 @@ These modules are imported by the scripts and are not meant to be executed direc
 
 | Module (under `src/aliciadata_finance_backend/`) | Purpose                                                                                                                                                 | Uploads to front end?                |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `backfill.py`                               | One-time backfill (`--past-days N`): one price download long enough for the oldest date, an early check that every session and close the runs need is present, the risk-free cache filled once, then one run per date, oldest first, each in its own process (the entry script with `--as-of` and the pinned cache date). Dates already complete (in the bucket's folders when uploading) are skipped unless `--force`; a failed date does not stop the others; each date's status, time, and peak memory go to `output/backfill/`. | No (each run uploads its own date) |
-| `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, and `PortfolioBacktestConfig`. | No |
-| `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache.                                                                               | No                                   |
+| `backfill.py`                               | One-time backfill (`--past-days N`): one price download long enough for the oldest date, an early check that every session and close the runs need is present, the exogenous variables downloaded once over the same range, the risk-free cache filled once, then one run per date, oldest first, each in its own process (the entry script with `--as-of` and the pinned cache date). Dates already complete (in the bucket's folders when uploading) are skipped unless `--force`; a failed date does not stop the others; each date's status, time, and peak memory go to `output/backfill/`. | No (each run uploads its own date) |
+| `config.py`                                 | Reads and strictly validates `config/modeling_and_optimization.yml` into `TimeSeriesConfig`, `PortfolioOptimizationConfig`, `PortfolioBacktestConfig`, and the list of `ExogenousVariable`s (symbol, source, transform, lag). | No |
+| `data/ticker_download_manager.py`           | Downloads new data from Massive.com or retrieves old data from the cache: the tickers (`input/annual/`) and, apart from them, the exogenous variables (`input/exogenous/`).                                                                              | No                                   |
 | `data/date_manager.py`                      | Date and business day calculations on the NYSE trading calendar (via `exchange_calendars`).                                                             | No                                   |
-| `data/prices.py`                            | Pivots downloaded prices to a wide table, cuts it off at an as-of date (so a run for a past date sees no later price), and selects the most recent trading sessions.                                                                 | No                                   |
+| `data/prices.py`                            | Pivots downloaded prices to a wide table, cuts it off at an as-of date (so a run for a past date sees no later price), and selects the most recent trading sessions; lists the sessions an exogenous variable has no value on (`exogenous_gaps()`).                                                              | No                                   |
 | `optimization/problem.py`                   | `PortfolioProblem`, the one definition of the optimization: mean and covariance estimates, risk-free rate, the constraint set (`bounds()`, `constraints()`: long-only, sum to 1, configurable cap), `portfolio_stats()` (every uploaded return, volatility, and Sharpe ratio), a seeded sampler of feasible random portfolios, and the annualization helpers. | No |
 | `optimization/portfolio.py`                 | Max Sharpe ratio and minimum variance optimizations under the shared constraints (raising `OptimizationError` if one does not converge), the maximum return portfolio (exact, in closed form), the efficient frontier (unreachable targets become `NaN`), and retrieval of the risk-free rate history, with the rate available before a given date. | No |
 | `optimization/workflow.py`                  | One full optimization run from prices to annualized results, all from one `PortfolioProblem`: the capital allocation line, the invariant checks (`InvariantError`), the random-portfolio summary, the `.h5` and `.yml` writers, and a read-back check that the two files agree. The `.yml` holds the weights of both the max Sharpe ratio and the minimum variance portfolios, with a comment marking `optimum_portfolio` as the max Sharpe ratio portfolio. | No |
@@ -201,7 +207,7 @@ These modules are imported by the scripts and are not meant to be executed direc
 | `forecasting/ticker_predict.py`             | `ArimaWalkForward`: walk-forward ARIMA training over rolling windows; `load_or_train_forecasts` caches the result, and retrains a cached file whose rows do not match the data and settings (`cached_forecasts_match`).                                      | No                                   |
 | `forecasting/metrics.py`                    | Accuracy of the ARIMA and naive forecasts over the configured number of most recent trading days (RMSE, MAE, MAPE, relative MAE, skill, directional accuracy) for `all_forecasts_metadata.yml`. | No |
 | `memory_usage.py`                           | Peak resident set size of the main process and of the largest ARIMA worker, from the operating system's counters, and an upper bound for all processes together; printed by the entry script after a run. macOS and Linux only: on Windows nothing is measured. | No |
-| `pipeline.py`                               | Orchestrates one backend run and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
+| `pipeline.py`                               | Orchestrates one backend run, including downloading the exogenous variables with the tickers and checking them (`load_exogenous()`), and its uploads (`all_forecasts.csv`, `all_forecasts_metadata.yml`, `.h5`, the two backtest files, then `optimization_metadata.yml` last). | Yes                                  |
 | `storage/layout.py`                         | Builds the dated `output/` paths and matching bucket keys (`<folder>/YYYY-MM-DD/<file>`).                                                               | No                                   |
 | `storage/s3_uploader.py`                    | Uploads files to the one S3 bucket (`S3_BUCKET_NAME`) by full object key; requires every bucket variable, and rejects an endpoint that names the bucket or has a path. Also checks whether an object exists (`object_exists()`), which a backfill uses to skip dates already complete.                       | Yes (other modules use it to upload) |
 

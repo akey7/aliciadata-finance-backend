@@ -10,9 +10,10 @@ How it avoids repeated downloads and look-ahead:
 1. prepare_backfill() downloads prices once, long enough for the oldest
    date, and checks before any run that every ticker has every session and
    close that the runs need (check_backfill_prices()), so a gap fails the
-   backfill early instead of one day at a time. It then fills the risk-free
-   rate cache back to before the oldest date's first rebalance. Both caches
-   in input/ are named by the day the backfill started; every run reads
+   backfill early instead of one day at a time. It downloads the exogenous
+   variables over the same range, once, and fills the risk-free rate cache
+   back to before the oldest date's first rebalance. The caches in input/
+   are named by the day the backfill started; every run reads
    them with that day pinned (pipeline.run_pipeline(cache_date=...)), even
    after midnight, so nothing is downloaded again.
 2. Every run cuts the prices off at its own date before using them, so a
@@ -44,6 +45,7 @@ from aliciadata_finance_backend.data.prices import pivot_close_wide, sessions_th
 from aliciadata_finance_backend.memory_usage import BYTES_PER_MIB, PeakMemory
 from aliciadata_finance_backend.pipeline import (
     first_rebalance_date,
+    load_exogenous,
     price_download_sessions,
     required_sessions,
 )
@@ -183,6 +185,7 @@ def prepare_backfill(
     refresh_data: bool,
     sessions_getter: Callable[[pd.Timestamp, int], pd.DatetimeIndex],
     risk_free_history_getter: Callable[..., pd.DataFrame],
+    exogenous_symbols: tuple[str, ...],
 ) -> list[pd.Timestamp]:
     """
     Get everything the backfill's runs read into the caches, once, and
@@ -192,7 +195,10 @@ def prepare_backfill(
        today's cached download if it is long enough). A cached download that
        is too short is downloaded again once.
     2. check_backfill_prices() on them.
-    3. The risk-free rate history, back to before the oldest date's first
+    3. The exogenous variables over the same range (pipeline.load_exogenous(),
+       which prints any missing sessions and fails if a variable has none of
+       them), cached apart from the prices.
+    4. The risk-free rate history, back to before the oldest date's first
        rebalance, the earliest optimization date of the whole backfill.
 
     tdm and dm must name their caches by the same pinned day that the runs
@@ -218,6 +224,9 @@ def prepare_backfill(
     sessions_getter, risk_free_history_getter : callables
         data.date_manager.nyse_sessions_ending() and
         optimization.portfolio.get_risk_free_rate_history(), or test doubles.
+
+    exogenous_symbols : tuple[str, ...]
+        The exogenous variables' symbols (ModelingConfig.exogenous_symbols).
 
     Returns
     -------
@@ -246,13 +255,25 @@ def prepare_backfill(
     check_backfill_prices(
         wide_df, n_sessions, sessions_getter(wide_df.index.max(), n_sessions)
     )
+    # The exogenous variables over the same range, once, checked against the
+    # sessions any date's forecasts use: the oldest date's ARIMA input plus
+    # one session per later date.
+    forecast_sessions = ts_config.arima_window_sessions + past_days - 1
+    load_exogenous(
+        tdm,
+        exogenous_symbols,
+        days_in_past=n_download,
+        refresh_data=refresh_data,
+        as_of_date=None,
+        sessions=wide_df.sort_index().index[-forecast_sessions:],
+    )
     dates = backfill_dates(wide_df.index, past_days)
     oldest_prices = sessions_through(wide_df, dates[0])
     risk_free_history_getter(dm, first_rebalance_date(oldest_prices, bt_config))
     print(
         f"Backfilling {len(dates)} date(s), {dates[0]:%Y-%m-%d} to "
-        f"{dates[-1]:%Y-%m-%d}, from prices and risk-free rates cached "
-        f"{dm.get_today_date()}."
+        f"{dates[-1]:%Y-%m-%d}, from prices, exogenous variables, and "
+        f"risk-free rates cached {dm.get_today_date()}."
     )
     return dates
 

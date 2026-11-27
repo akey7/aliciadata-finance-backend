@@ -65,3 +65,20 @@ portfolio_backtest:
   # holding period. At least 1, and it must divide evaluation_window_length
   # exactly.
   rebalance_interval_sessions: 5
+# Exogenous variables: the regressors of the ARIMAX forecasts, downloaded once
+# per run with the tickers but cached apart from them, in input/exogenous/.
+# A list of one or more entries; each symbol at most once. Each entry has:
+#   symbol:    the symbol at the source (I:SPX is the S&P 500 index).
+#   source:    where it is downloaded from: massive (Massive.com daily
+#              aggregates, like the tickers).
+#   transform: how its daily values become a regressor: log_return, the daily
+#              log return, for price-like series such as an index.
+#   lag:       trading sessions the regressor is lagged by. Only 1 is
+#              supported: the forecast for a session uses the variable's
+#              value at the previous session's close, known before the
+#              forecast is made.
+exogenous_variables:
+  - symbol: "I:SPX"
+    source: massive
+    transform: log_return
+    lag: 1

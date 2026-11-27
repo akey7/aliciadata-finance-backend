@@ -7,6 +7,7 @@ import pytest
 
 from conftest import SYNTHETIC_SESSIONS, SYNTHETIC_TICKERS
 from aliciadata_finance_backend.data.prices import (
+    exogenous_gaps,
     last_n_sessions,
     pivot_close_wide,
     sessions_through,
@@ -122,3 +123,28 @@ def test_sessions_through_returns_a_sorted_copy(long_prices):
 )
 def test_weekdays_after(as_of, last, expected):
     assert weekdays_after(pd.Timestamp(as_of), pd.Timestamp(last)) == expected
+
+
+def test_exogenous_gaps_lists_each_symbols_missing_sessions(long_prices):
+    exogenous = pivot_close_wide(long_prices)  # XBI, QQQ, GLD stand in.
+    sessions = exogenous.index[:10]
+    exogenous.loc[exogenous.index[3], "QQQ"] = float("nan")
+    gaps = exogenous_gaps(exogenous, ["XBI", "QQQ"], sessions)
+    assert list(gaps) == ["XBI", "QQQ"]
+    assert gaps["XBI"] == []
+    assert gaps["QQQ"] == [exogenous.index[3].normalize()]
+
+
+def test_exogenous_gaps_of_an_absent_symbol_are_every_session(long_prices):
+    exogenous = pivot_close_wide(long_prices)
+    sessions = exogenous.index[:4]
+    assert exogenous_gaps(exogenous, ["I:SPX"], sessions) == {
+        "I:SPX": list(sessions.normalize())
+    }
+
+
+def test_exogenous_gaps_count_sessions_outside_the_data(long_prices):
+    exogenous = pivot_close_wide(long_prices)
+    later = pd.bdate_range(exogenous.index[-1].normalize(), periods=3)[1:]
+    sessions = exogenous.index[-2:].append(later)
+    assert exogenous_gaps(exogenous, ["GLD"], sessions)["GLD"] == list(later)

@@ -148,8 +148,66 @@ class TickerDownloadManager:
         long_df_filename = os.path.join(
             self.download_folder_name, f"Tickers {self.dm.get_today_date()}.csv"
         )
-        if use_cache and os.path.exists(long_df_filename):
-            df = pd.read_csv(long_df_filename)
+        return self._latest(self.tickers, long_df_filename, days_in_past, use_cache)
+
+    def get_latest_exogenous(
+        self,
+        symbols: list[str],
+        folder_name: str,
+        days_in_past: int = 40,
+        use_cache: bool = True,
+    ) -> tuple[pd.DataFrame, str | pd.Timestamp, str | pd.Timestamp]:
+        """
+        Retrieve the latest daily values of the exogenous variables (such as
+        the S&P 500 index, I:SPX), over the same range as get_latest_tickers()
+        for the same days_in_past, ending on the business day before today.
+
+        They are cached apart from the tickers being modeled, in folder_name
+        (normally input/exogenous/), in a file named
+        "Exogenous YYYY-MM-DD.csv" using today's date (see DateManager's
+        today), in the same long format as the tickers' cache: one row per
+        symbol and session, with the symbol in the "ticker" column and its
+        value in "close". Each symbol is one call to Massive.com's daily
+        aggregates, the same endpoint as the tickers, which returns the whole
+        range at once; indices are requested by their symbol (e.g. I:SPX).
+        The download is printed per symbol, like the tickers'.
+
+        Parameters
+        ----------
+        symbols : list[str]
+            The exogenous variables' symbols (ModelingConfig.exogenous_symbols).
+
+        folder_name : str
+            Folder of the cache file. Created when the file is written.
+
+        days_in_past : int
+            The number of business days in the past to retrieve.
+
+        use_cache : bool
+            As for get_latest_tickers(): read today's cache file if it exists,
+            otherwise download and write it; if False, always download.
+
+        Returns
+        -------
+        Tuple[pd.DataFrame, str | pd.Timestamp, str | pd.Timestamp]
+            The values in long format, and the start and end dates, as
+            returned by get_latest_tickers().
+        """
+        filename = os.path.join(
+            folder_name, f"Exogenous {self.dm.get_today_date()}.csv"
+        )
+        return self._latest(list(symbols), filename, days_in_past, use_cache)
+
+    def _latest(
+        self, symbols: list[str], filename: str, days_in_past: int, use_cache: bool
+    ) -> tuple[pd.DataFrame, str | pd.Timestamp, str | pd.Timestamp]:
+        """
+        Read today's cache file of these symbols, or download them over the
+        days_in_past business days ending before today and write it (see
+        get_latest_tickers() for the rules).
+        """
+        if use_cache and os.path.exists(filename):
+            df = pd.read_csv(filename)
             start_date = df["datetime"].min()
             end_date = df["datetime"].max()
             return df, start_date, end_date
@@ -159,8 +217,6 @@ class TickerDownloadManager:
         date_to = self.dm.past_business_day(
             pd.Timestamp(self.dm.get_today_date()), 1
         ).replace(hour=23, minute=59, second=59)
-        long_df = self.download_tickers(
-            self.tickers, date_from=date_from, date_to=date_to
-        )
-        long_df.to_csv(ensure_parent_dir(long_df_filename), index=True)
+        long_df = self.download_tickers(symbols, date_from=date_from, date_to=date_to)
+        long_df.to_csv(ensure_parent_dir(filename), index=True)
         return long_df, date_from, date_to

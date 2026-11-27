@@ -62,3 +62,52 @@ def test_get_latest_tickers_reads_cache_written_into_new_folder(tmp_path):
     cached_df, _, _ = tdm.get_latest_tickers(days_in_past=5)
     assert calls["count"] == 1
     assert set(cached_df["ticker"]) == {"XBI", "QQQ"}
+
+
+# Exogenous variables
+
+
+def make_manager_recording_symbols(folder: str):
+    tdm, calls = make_manager(folder)
+    calls["symbols"] = []
+    download = tdm.download_tickers
+
+    def recording_download(tickers, date_from, date_to, delay=10):
+        calls["symbols"].append(list(tickers))
+        return download(tickers, date_from, date_to, delay)
+
+    tdm.download_tickers = recording_download
+    return tdm, calls
+
+
+def test_exogenous_values_are_cached_apart_from_the_tickers(tmp_path):
+    tickers_folder = str(tmp_path / "input" / "annual")
+    exogenous_folder = str(tmp_path / "input" / "exogenous")
+    tdm, calls = make_manager_recording_symbols(tickers_folder)
+    tdm.get_latest_tickers(days_in_past=5)
+    long_df, _, _ = tdm.get_latest_exogenous(
+        ["I:SPX"], exogenous_folder, days_in_past=5
+    )
+    assert calls["symbols"] == [["XBI", "QQQ"], ["I:SPX"]]
+    assert set(long_df["ticker"]) == {"I:SPX"}
+    assert os.listdir(exogenous_folder) == [f"Exogenous {TODAY}.csv"]
+    assert os.listdir(tickers_folder) == [f"Tickers {TODAY}.csv"]
+    cached_tickers = pd.read_csv(os.path.join(tickers_folder, f"Tickers {TODAY}.csv"))
+    assert "I:SPX" not in set(cached_tickers["ticker"])
+
+
+def test_exogenous_cache_is_read_back_without_a_download(tmp_path):
+    folder = str(tmp_path / "input" / "exogenous")
+    tdm, calls = make_manager(str(tmp_path / "input" / "annual"))
+    tdm.get_latest_exogenous(["I:SPX"], folder, days_in_past=5)
+    cached, _, _ = tdm.get_latest_exogenous(["I:SPX"], folder, days_in_past=5)
+    assert calls["count"] == 1
+    assert set(cached["ticker"]) == {"I:SPX"}
+
+
+def test_exogenous_download_without_the_cache_overwrites_it(tmp_path):
+    folder = str(tmp_path / "input" / "exogenous")
+    tdm, calls = make_manager(str(tmp_path / "input" / "annual"))
+    tdm.get_latest_exogenous(["I:SPX"], folder, days_in_past=5)
+    tdm.get_latest_exogenous(["I:SPX"], folder, days_in_past=5, use_cache=False)
+    assert calls["count"] == 2

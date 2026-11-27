@@ -24,6 +24,15 @@ File layout:
       training_window_returns: <int>     # daily returns per optimization, live too
       evaluation_window_length: <int>    # backtest days scored
       rebalance_interval_sessions: <int> # trading sessions between rebalances
+    exogenous_variables:                 # a list of one or more of:
+      - symbol: <str>                    # e.g. I:SPX
+        source: <str>                    # where it is downloaded from
+        transform: <str>                 # how its values become a regressor
+        lag: <int>                       # trading sessions it is lagged by
+
+The exogenous variables are the regressors of the ARIMAX forecasts. They are
+downloaded and cached apart from the tickers being modeled (input/exogenous/),
+and only their values up to the session before each forecast date are used.
 
 The backtest scores its own number of days
 (portfolio_backtest.evaluation_window_length), independent of the forecasts'
@@ -49,6 +58,18 @@ MIN_BACKTEST_TRAINING_RETURNS = 30
 # Smallest backtest accepted, in scored days: the realized volatility is a
 # standard deviation, which needs at least two daily returns.
 MIN_BACKTEST_EVALUATION_DAYS = 2
+
+EXOGENOUS_SECTION = "exogenous_variables"
+# Where an exogenous variable can be downloaded from: Massive.com's daily
+# aggregates, like the tickers (indices use symbols such as I:SPX).
+EXOGENOUS_SOURCES = ("massive",)
+# How an exogenous variable's daily values become a regressor: log_return is
+# log(v_t) - log(v_{t-1}), for price-like series such as an index.
+EXOGENOUS_TRANSFORMS = ("log_return",)
+# Lags supported, in trading sessions. A lag of 1 regresses the forecast for
+# session t + 1 on the variable's value at the close of t, already known when
+# the forecast is made; a lag of 0 would be look-ahead.
+EXOGENOUS_LAGS = (1,)
 
 
 class ConfigError(ValueError):
@@ -256,16 +277,82 @@ class PortfolioBacktestConfig:
         return self.training_window_closes + self.evaluation_window_length
 
 
+def _require_choice(name: str, value: object, choices: tuple, section: str) -> None:
+    if value not in choices:
+        allowed = ", ".join(map(repr, choices))
+        raise ConfigError(f"{section}.{name} must be one of {allowed}, got {value!r}.")
+
+
+@dataclass(frozen=True)
+class ExogenousVariable:
+    """
+    One exogenous variable: a regressor of the ARIMAX forecasts. Validated on
+    construction.
+
+    Attributes
+    ----------
+    symbol : str
+        Its symbol at the source, e.g. "I:SPX" (the S&P 500 index on
+        Massive.com). Kept apart from the tickers being modeled.
+
+    source : str
+        Where it is downloaded from, one of EXOGENOUS_SOURCES.
+
+    transform : str
+        How its daily values become a regressor, one of
+        EXOGENOUS_TRANSFORMS.
+
+    lag : int
+        Trading sessions it is lagged by, one of EXOGENOUS_LAGS: the forecast
+        for a session uses the variable's value from this many sessions
+        before it, never the same session's.
+    """
+
+    symbol: str
+    source: str
+    transform: str
+    lag: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.symbol, str) or not self.symbol.strip():
+            raise ConfigError(
+                f"{EXOGENOUS_SECTION} symbol must be a non-empty string, "
+                f"got {self.symbol!r}."
+            )
+        section = f"{EXOGENOUS_SECTION}[{self.symbol}]"
+        _require_choice("source", self.source, EXOGENOUS_SOURCES, section)
+        _require_choice("transform", self.transform, EXOGENOUS_TRANSFORMS, section)
+        _require_int("lag", self.lag, 1, section)
+        _require_choice("lag", self.lag, EXOGENOUS_LAGS, section)
+
+
 @dataclass(frozen=True)
 class ModelingConfig:
     """
     The whole configuration file: one field per section. Each section
-    validates itself on construction.
+    validates itself on construction; exogenous_variables must name each
+    symbol once.
     """
 
     time_series_models: TimeSeriesConfig
     portfolio_optimization: PortfolioOptimizationConfig
     portfolio_backtest: PortfolioBacktestConfig
+    exogenous_variables: tuple[ExogenousVariable, ...]
+
+    def __post_init__(self) -> None:
+        if not self.exogenous_variables:
+            raise ConfigError(f"{EXOGENOUS_SECTION} must list at least one variable.")
+        symbols = [variable.symbol for variable in self.exogenous_variables]
+        duplicates = sorted({s for s in symbols if symbols.count(s) > 1})
+        if duplicates:
+            raise ConfigError(
+                f"{EXOGENOUS_SECTION} lists {', '.join(duplicates)} more than once."
+            )
+
+    @property
+    def exogenous_symbols(self) -> tuple[str, ...]:
+        """The exogenous variables' symbols, in the file's order."""
+        return tuple(variable.symbol for variable in self.exogenous_variables)
 
 
 def _check_keys(section: str, mapping: object, expected: set[str]) -> dict:
@@ -305,8 +392,24 @@ def parse_config(raw: object) -> ModelingConfig:
     top = _check_keys(
         "The configuration file",
         raw,
-        {"time_series_models", PORTFOLIO_SECTION, BACKTEST_SECTION},
+        {
+            "time_series_models",
+            PORTFOLIO_SECTION,
+            BACKTEST_SECTION,
+            EXOGENOUS_SECTION,
+        },
     )
+    exogenous = top[EXOGENOUS_SECTION]
+    if not isinstance(exogenous, list):
+        raise ConfigError(f"{EXOGENOUS_SECTION} must be a list, got {exogenous!r}.")
+    exogenous_entries = [
+        _check_keys(
+            f"{EXOGENOUS_SECTION}[{i}]",
+            entry,
+            {"symbol", "source", "transform", "lag"},
+        )
+        for i, entry in enumerate(exogenous)
+    ]
     ts = _check_keys(
         "time_series_models",
         top["time_series_models"],
@@ -348,6 +451,15 @@ def parse_config(raw: object) -> ModelingConfig:
             training_window_returns=bt["training_window_returns"],
             evaluation_window_length=bt["evaluation_window_length"],
             rebalance_interval_sessions=bt["rebalance_interval_sessions"],
+        ),
+        exogenous_variables=tuple(
+            ExogenousVariable(
+                symbol=entry["symbol"],
+                source=entry["source"],
+                transform=entry["transform"],
+                lag=entry["lag"],
+            )
+            for entry in exogenous_entries
         ),
     )
 

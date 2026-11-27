@@ -111,3 +111,42 @@ def weekdays_after(as_of: pd.Timestamp, last: pd.Timestamp) -> int:
     if end < start:
         return 0
     return len(pd.bdate_range(start, end))
+
+
+def exogenous_gaps(
+    exogenous_wide: pd.DataFrame, symbols: list[str], sessions: pd.DatetimeIndex
+) -> dict[str, list[pd.Timestamp]]:
+    """
+    For each exogenous symbol, the sessions (dates, time of day dropped) on
+    which it has no value: every one of sessions for a symbol missing from
+    exogenous_wide altogether. Pure function.
+
+    Parameters
+    ----------
+    exogenous_wide : pd.DataFrame
+        The exogenous variables' values, one column per symbol, as returned
+        by pivot_close_wide().
+
+    symbols : list[str]
+        The symbols to check, in order.
+
+    sessions : pd.DatetimeIndex
+        The sessions that must have a value, normally those of the tickers'
+        prices that the forecasts use.
+
+    Returns
+    -------
+    dict[str, list[pd.Timestamp]]
+        One entry per symbol, in order: its missing sessions in date order,
+        empty when it has a value on every one.
+    """
+    wanted = pd.DatetimeIndex(sessions).normalize().sort_values()
+    gaps = {}
+    for symbol in symbols:
+        if symbol not in exogenous_wide.columns:
+            gaps[symbol] = list(wanted)
+            continue
+        values = exogenous_wide[symbol].dropna()
+        present = set(pd.DatetimeIndex(values.index).normalize())
+        gaps[symbol] = [day for day in wanted if day not in present]
+    return gaps

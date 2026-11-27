@@ -61,6 +61,7 @@ PAST_DAYS = 4
 REQUIRED = required_sessions(TS_CONFIG, BT_CONFIG)  # 50
 NEEDED = backfill_sessions(TS_CONFIG, BT_CONFIG, PAST_DAYS)  # 53
 DOWNLOAD = backfill_download_sessions(TS_CONFIG, BT_CONFIG, PAST_DAYS)  # 58
+EXOGENOUS_SYMBOLS = ("I:SPX",)
 
 
 def fake_sessions(last_session: pd.Timestamp, n_sessions: int) -> pd.DatetimeIndex:
@@ -74,18 +75,43 @@ class FakeDateManager:
 
 
 class FakeTickerDownloadManager:
-    """Returns cached_df when the cache is allowed (if given), else long_df."""
+    """
+    Returns cached_df when the cache is allowed (if given), else long_df.
+    The exogenous values cover long_df's sessions unless exogenous_symbols
+    says which symbols they have.
+    """
 
-    def __init__(self, long_df: pd.DataFrame, cached_df: pd.DataFrame | None = None):
+    def __init__(
+        self,
+        long_df: pd.DataFrame,
+        cached_df: pd.DataFrame | None = None,
+        exogenous_symbols: tuple[str, ...] = EXOGENOUS_SYMBOLS,
+    ):
         self.long_df = long_df
         self.cached_df = cached_df
+        self.exogenous_symbols = exogenous_symbols
         self.calls: list[dict] = []
+        self.exogenous_calls: list[dict] = []
 
     def get_latest_tickers(self, days_in_past=40, use_cache=True):
         self.calls.append({"days_in_past": days_in_past, "use_cache": use_cache})
         if use_cache and self.cached_df is not None:
             return self.cached_df, "start", "end"
         return self.long_df, "start", "end"
+
+    def get_latest_exogenous(
+        self, symbols, folder_name, days_in_past=40, use_cache=True
+    ):
+        self.exogenous_calls.append(
+            {"symbols": list(symbols), "days_in_past": days_in_past}
+        )
+        dates = sorted(self.long_df["datetime"].unique())
+        rows = [
+            {"datetime": date, "ticker": symbol, "close": 4000.0 + i}
+            for symbol in self.exogenous_symbols
+            for i, date in enumerate(dates)
+        ]
+        return pd.DataFrame(rows), "start", "end"
 
 
 class RecordingRiskFree:
@@ -107,6 +133,7 @@ def prepare(tdm, risk_free=None, refresh_data=False):
         refresh_data=refresh_data,
         sessions_getter=fake_sessions,
         risk_free_history_getter=risk_free or RecordingRiskFree(),
+        exogenous_symbols=EXOGENOUS_SYMBOLS,
     )
 
 
@@ -225,6 +252,24 @@ def test_prepare_fails_early_on_a_gap_before_touching_the_risk_free_rates():
     risk_free = RecordingRiskFree()
     with pytest.raises(ValueError, match="has no close"):
         prepare(FakeTickerDownloadManager(long_df), risk_free)
+    assert risk_free.calls == []
+
+
+def test_prepare_downloads_the_exogenous_values_once_over_the_same_range():
+    tdm = FakeTickerDownloadManager(make_long_prices(n_sessions=DOWNLOAD))
+    prepare(tdm)
+    assert tdm.exogenous_calls == [
+        {"symbols": list(EXOGENOUS_SYMBOLS), "days_in_past": DOWNLOAD}
+    ]
+
+
+def test_prepare_fails_early_when_an_exogenous_variable_is_missing():
+    tdm = FakeTickerDownloadManager(
+        make_long_prices(n_sessions=DOWNLOAD), exogenous_symbols=("I:VIX",)
+    )
+    risk_free = RecordingRiskFree()
+    with pytest.raises(ValueError, match="I:SPX has no value on any"):
+        prepare(tdm, risk_free)
     assert risk_free.calls == []
 
 

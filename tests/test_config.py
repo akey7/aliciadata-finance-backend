@@ -19,6 +19,7 @@ from aliciadata_finance_backend.config import (
     MIN_BACKTEST_TRAINING_RETURNS,
     MIN_TRAINING_WINDOW_LENGTH,
     ConfigError,
+    ExogenousVariable,
     ModelingConfig,
     PortfolioBacktestConfig,
     PortfolioOptimizationConfig,
@@ -48,18 +49,27 @@ PORTFOLIO_YAML = (
     "  training_window_returns: 252\n"
     "  evaluation_window_length: 250\n"
     "  rebalance_interval_sessions: 5\n"
+    "exogenous_variables:\n"
+    '  - symbol: "I:SPX"\n'
+    "    source: massive\n"
+    "    transform: log_return\n"
+    "    lag: 1\n"
 )
 BACKTEST = {
     "training_window_returns": 252,
     "evaluation_window_length": 250,
     "rebalance_interval_sessions": 5,
 }
+SPX = {"symbol": "I:SPX", "source": "massive", "transform": "log_return", "lag": 1}
 
 
-def raw(training=252, evaluation=20, portfolio=None, backtest=None, **extra) -> dict:
+def raw(
+    training=252, evaluation=20, portfolio=None, backtest=None, exogenous=None, **extra
+) -> dict:
     """
     A parsed YAML document; extra keys go under time_series_models, and
     portfolio and backtest (dicts) replace or add keys in their sections.
+    exogenous replaces the list of exogenous variables (default: I:SPX).
     """
     return {
         "time_series_models": {
@@ -69,6 +79,7 @@ def raw(training=252, evaluation=20, portfolio=None, backtest=None, **extra) -> 
         },
         "portfolio_optimization": {**PORTFOLIO, **(portfolio or {})},
         "portfolio_backtest": {**BACKTEST, **(backtest or {})},
+        "exogenous_variables": [dict(SPX)] if exogenous is None else exogenous,
     }
 
 
@@ -93,7 +104,13 @@ def test_parse_config_reads_every_value():
             evaluation_window_length=250,
             rebalance_interval_sessions=5,
         ),
+        exogenous_variables=(
+            ExogenousVariable(
+                symbol="I:SPX", source="massive", transform="log_return", lag=1
+            ),
+        ),
     )
+    assert config.exogenous_symbols == ("I:SPX",)
 
 
 def test_derived_window_sizes():
@@ -354,6 +371,91 @@ def test_backtest_sessions_needed():
     assert config.sessions_needed == 503  # 253 closes + 250 scored days.
 
 
+# Exogenous variables
+
+
+def test_missing_exogenous_section_is_rejected():
+    document = raw()
+    del document["exogenous_variables"]
+    with pytest.raises(ConfigError, match="missing required key.*exogenous_variables"):
+        parse_config(document)
+
+
+@pytest.mark.parametrize("value", [None, {}, "I:SPX", 5])
+def test_exogenous_variables_must_be_a_list(value):
+    # Set the key directly: raw() reads exogenous=None as "use the default".
+    document = raw()
+    document["exogenous_variables"] = value
+    with pytest.raises(ConfigError, match="exogenous_variables must be a list"):
+        parse_config(document)
+
+
+def test_exogenous_variables_need_at_least_one_entry():
+    with pytest.raises(ConfigError, match="at least one variable"):
+        parse_config(raw(exogenous=[]))
+
+
+@pytest.mark.parametrize("key", sorted(SPX))
+def test_missing_exogenous_key_is_rejected(key):
+    entry = {k: v for k, v in SPX.items() if k != key}
+    with pytest.raises(ConfigError, match=rf"exogenous_variables\[0\].*missing.*{key}"):
+        parse_config(raw(exogenous=[entry]))
+
+
+def test_unknown_exogenous_key_is_rejected():
+    with pytest.raises(ConfigError, match="unknown key.*scale"):
+        parse_config(raw(exogenous=[{**SPX, "scale": 1}]))
+
+
+def test_exogenous_entry_must_be_a_mapping():
+    with pytest.raises(ConfigError, match=r"exogenous_variables\[0\] must be a mapping"):
+        parse_config(raw(exogenous=["I:SPX"]))
+
+
+@pytest.mark.parametrize("symbol", ["", "   ", None, 5])
+def test_exogenous_symbol_must_be_a_non_empty_string(symbol):
+    with pytest.raises(ConfigError, match="symbol must be a non-empty string"):
+        parse_config(raw(exogenous=[{**SPX, "symbol": symbol}]))
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("source", "fred"),  # Not supported yet.
+        ("source", "Massive"),
+        ("transform", "level"),
+        ("transform", "difference"),  # Not supported yet.
+    ],
+)
+def test_exogenous_source_and_transform_must_be_supported(key, value):
+    with pytest.raises(ConfigError, match=rf"I:SPX\]\.{key} must be one of"):
+        parse_config(raw(exogenous=[{**SPX, key: value}]))
+
+
+@pytest.mark.parametrize("lag", [0, -1, 2])
+def test_exogenous_lag_must_be_supported(lag):
+    # 0 would be look-ahead; only 1 is supported for now.
+    with pytest.raises(ConfigError, match="lag must be"):
+        parse_config(raw(exogenous=[{**SPX, "lag": lag}]))
+
+
+@pytest.mark.parametrize("lag", [1.0, "1", True, None])
+def test_exogenous_lag_must_be_an_integer(lag):
+    with pytest.raises(ConfigError, match="lag must be an integer"):
+        parse_config(raw(exogenous=[{**SPX, "lag": lag}]))
+
+
+def test_exogenous_symbols_must_be_unique():
+    with pytest.raises(ConfigError, match="I:SPX more than once"):
+        parse_config(raw(exogenous=[dict(SPX), dict(SPX)]))
+
+
+def test_several_exogenous_variables_keep_their_order():
+    vix = {**SPX, "symbol": "I:VIX"}
+    config = parse_config(raw(exogenous=[vix, dict(SPX)]))
+    assert config.exogenous_symbols == ("I:VIX", "I:SPX")
+
+
 # load_config
 
 
@@ -371,6 +473,7 @@ def test_load_config_reads_a_yaml_file(tmp_path):
     )
     assert config.portfolio_optimization == PortfolioOptimizationConfig(**PORTFOLIO)
     assert config.portfolio_backtest == PortfolioBacktestConfig(**BACKTEST)
+    assert config.exogenous_variables == (ExogenousVariable(**SPX),)
 
 
 def test_load_config_missing_file_names_the_path(tmp_path):

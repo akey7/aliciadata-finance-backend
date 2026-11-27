@@ -25,6 +25,7 @@ from aliciadata_finance_backend.config import (
 )
 from aliciadata_finance_backend.data.prices import pivot_close_wide
 from aliciadata_finance_backend.pipeline import (
+    EXOGENOUS_DOWNLOAD_FOLDER,
     PORTFOLIO_FOLDER_ENV,
     TIME_SERIES_FOLDER_ENV,
     first_rebalance_date,
@@ -39,6 +40,7 @@ from aliciadata_finance_backend.storage.s3_uploader import BUCKET_NAME_ENV
 
 BUCKET = "test-bucket"
 COMPUTED_AT = "2026-11-14T12:00:00Z"
+EXOGENOUS_SYMBOLS = ("I:SPX",)
 TS_FOLDER = "test-time-series"
 PO_FOLDER = "test-portfolio"
 STUB_UPLIFT = 1.01  # Fake ARIMA forecast = 1 % above the previous close.
@@ -92,17 +94,60 @@ class FakeTickerDownloadManager:
     test can make today's cached download differ from a fresh one.
     """
 
-    def __init__(self, long_df: pd.DataFrame, cached_df: pd.DataFrame | None = None):
+    def __init__(
+        self,
+        long_df: pd.DataFrame,
+        cached_df: pd.DataFrame | None = None,
+        exogenous_df: pd.DataFrame | None = None,
+        cached_exogenous_df: pd.DataFrame | None = None,
+    ):
         self.long_df = long_df
         self.cached_df = cached_df
+        # By default, the exogenous values cover the same sessions as long_df.
+        self.exogenous_df = (
+            exogenous_values(long_df) if exogenous_df is None else exogenous_df
+        )
+        self.cached_exogenous_df = cached_exogenous_df
         self.tickers = list(SYNTHETIC_TICKERS)
         self.calls: list[dict] = []
+        self.exogenous_calls: list[dict] = []
 
     def get_latest_tickers(self, days_in_past=40, use_cache=True):
         self.calls.append({"days_in_past": days_in_past, "use_cache": use_cache})
         if use_cache and self.cached_df is not None:
             return self.cached_df, "start", "end"
         return self.long_df, "start", "end"
+
+    def get_latest_exogenous(
+        self, symbols, folder_name, days_in_past=40, use_cache=True
+    ):
+        self.exogenous_calls.append(
+            {
+                "symbols": list(symbols),
+                "folder_name": folder_name,
+                "days_in_past": days_in_past,
+                "use_cache": use_cache,
+            }
+        )
+        if use_cache and self.cached_exogenous_df is not None:
+            return self.cached_exogenous_df, "start", "end"
+        return self.exogenous_df, "start", "end"
+
+
+def exogenous_values(
+    long_df: pd.DataFrame, symbols: tuple[str, ...] = EXOGENOUS_SYMBOLS
+) -> pd.DataFrame:
+    """
+    Long-format exogenous values on the same sessions as a long price
+    download, shaped like the exogenous cache (datetime, ticker, close).
+    """
+    dates = sorted(long_df["datetime"].unique())
+    rows = [
+        {"datetime": date, "ticker": symbol, "close": 4000.0 * (1.001**i)}
+        for symbol in symbols
+        for i, date in enumerate(dates)
+    ]
+    return pd.DataFrame(rows)
 
 
 class FakeTrainer:
@@ -173,6 +218,7 @@ def deps(tmp_path):
         bt_config=BT_CONFIG,
         # Fixed, so files from two runs can be compared byte for byte.
         computed_at=COMPUTED_AT,
+        exogenous_symbols=EXOGENOUS_SYMBOLS,
     )
     return tdm, trainer, uploader, kwargs
 
@@ -893,6 +939,9 @@ def test_cache_too_short_for_a_past_as_of_date_downloads_once_more(deps):
         {"days_in_past": PRICE_DOWNLOAD_SESSIONS, "use_cache": True},
         {"days_in_past": PRICE_DOWNLOAD_SESSIONS + LATER_SESSIONS, "use_cache": False},
     ]
+    # The exogenous values are requested over the same, longer range.
+    (exogenous_call,) = tdm.exogenous_calls
+    assert exogenous_call["days_in_past"] == PRICE_DOWNLOAD_SESSIONS + LATER_SESSIONS
 
 
 def test_as_of_date_after_the_latest_session_fails_before_any_output(
@@ -993,3 +1042,101 @@ def test_first_rebalance_date_is_the_close_ending_the_first_training_window():
     wide = wide_prices()
     expected = wide.index[-BACKTEST_SESSIONS + BT_CONFIG.training_window_returns]
     assert first_rebalance_date(wide, BT_CONFIG) == expected
+
+
+# Exogenous variables (downloaded and checked; the ARIMAX forecasts that use
+# them come later)
+
+
+def test_exogenous_values_are_downloaded_with_the_tickers_and_cached_apart(deps):
+    tdm, _, _, kwargs = deps
+    run_pipeline(upload=False, **kwargs)
+    assert tdm.exogenous_calls == [
+        {
+            "symbols": list(EXOGENOUS_SYMBOLS),
+            "folder_name": EXOGENOUS_DOWNLOAD_FOLDER,
+            "days_in_past": PRICE_DOWNLOAD_SESSIONS,
+            "use_cache": True,
+        }
+    ]
+    assert EXOGENOUS_DOWNLOAD_FOLDER == os.path.join("input", "exogenous")
+
+
+def test_refresh_downloads_the_exogenous_values_too(deps):
+    tdm, _, _, kwargs = deps
+    run_pipeline(upload=False, refresh_data=True, **kwargs)
+    assert [call["use_cache"] for call in tdm.exogenous_calls] == [False]
+
+
+def test_exogenous_cache_without_a_variable_is_downloaded_again(deps):
+    # Today's cache was written with other variables than the configuration's.
+    _, _, _, kwargs = deps
+    long_df = make_long_prices(n_sessions=N_SESSIONS)
+    tdm = FakeTickerDownloadManager(
+        long_df, cached_exogenous_df=exogenous_values(long_df, ("I:VIX",))
+    )
+    kwargs["tdm"] = tdm
+    run_pipeline(upload=False, **kwargs)
+    assert [call["use_cache"] for call in tdm.exogenous_calls] == [True, False]
+
+
+def test_exogenous_cache_starting_too_late_is_downloaded_again(deps):
+    _, _, _, kwargs = deps
+    long_df = make_long_prices(n_sessions=N_SESSIONS)
+    exogenous = exogenous_values(long_df)
+    dates = sorted(exogenous["datetime"].unique())
+    # Starts one session after the first session of the ARIMA input.
+    first_dates = dates[: len(dates) - ARIMA_WINDOW_SESSIONS + 1]
+    late_cache = exogenous[~exogenous["datetime"].isin(first_dates)]
+    tdm = FakeTickerDownloadManager(long_df, cached_exogenous_df=late_cache)
+    kwargs["tdm"] = tdm
+    run_pipeline(upload=False, **kwargs)
+    assert [call["use_cache"] for call in tdm.exogenous_calls] == [True, False]
+
+
+def test_a_missing_exogenous_variable_fails_before_any_output(
+    upload_env, deps, tmp_path
+):
+    _, trainer, uploader, kwargs = deps
+    long_df = make_long_prices(n_sessions=N_SESSIONS)
+    kwargs["tdm"] = FakeTickerDownloadManager(
+        long_df, exogenous_df=exogenous_values(long_df, ("I:VIX",))
+    )
+    with pytest.raises(ValueError, match="I:SPX has no value on any"):
+        run_pipeline(**kwargs)
+    assert trainer.calls == []
+    assert uploader.calls == []
+    assert not os.path.exists(tmp_path / "output")
+
+
+def test_a_missing_exogenous_session_is_reported_and_the_run_goes_on(deps, capsys):
+    _, _, _, kwargs = deps
+    long_df = make_long_prices(n_sessions=N_SESSIONS)
+    exogenous = exogenous_values(long_df)
+    gap = sorted(exogenous["datetime"].unique())[-10]  # Inside the ARIMA input.
+    kwargs["tdm"] = FakeTickerDownloadManager(
+        long_df, exogenous_df=exogenous[exogenous["datetime"] != gap]
+    )
+    result = run_pipeline(upload=False, **kwargs)
+    out = capsys.readouterr().out
+    assert "Warning: the exogenous variable I:SPX has no value on 1 of the" in out
+    assert f"(the first on {pd.Timestamp(gap):%Y-%m-%d})" in out
+    assert "Loaded exogenous variables I:SPX" in out
+    assert os.path.isfile(result.metadata_path)
+
+
+def test_exogenous_values_after_a_past_as_of_date_are_ignored(deps):
+    # Values after the as-of date neither count as coverage nor cause a gap.
+    _, _, _, kwargs = deps
+    long_df, as_of = prices_with_later_sessions()
+    exogenous = exogenous_values(long_df)
+    later = [
+        d for d in exogenous["datetime"].unique() if pd.Timestamp(d).normalize() > as_of
+    ]
+    tdm = FakeTickerDownloadManager(
+        long_df, exogenous_df=exogenous[~exogenous["datetime"].isin(later[:2])]
+    )
+    kwargs["tdm"] = tdm
+    result = run_pipeline(upload=False, **kwargs, as_of_date=as_of)
+    assert result.as_of == as_of.strftime("%Y-%m-%d")
+    assert [call["use_cache"] for call in tdm.exogenous_calls] == [True]

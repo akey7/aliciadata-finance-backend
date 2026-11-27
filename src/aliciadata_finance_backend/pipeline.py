@@ -17,6 +17,10 @@ Order of operations:
    prices are cut off after that session before any step below sees them, so
    the run is the one that data ending that day would give; the as-of date
    names the date folder and the download also covers the sessions after it.
+   The exogenous variables (the ARIMAX regressors, such as the S&P 500
+   index) are downloaded with the tickers over the same range, cached apart
+   from them in input/exogenous/, cut off at the as-of date the same way, and
+   checked against the sessions the forecasts use (load_exogenous()).
 2. ARIMA: trained on the last TimeSeriesConfig.arima_window_sessions of that data,
    cached as output/time_series/<as-of date>/all_forecasts.csv (a cached CSV
    whose rows do not match the data and settings is retrained). Metrics on
@@ -58,6 +62,7 @@ from aliciadata_finance_backend.data.date_manager import (
     nyse_sessions_ending,
 )
 from aliciadata_finance_backend.data.prices import (
+    exogenous_gaps,
     last_n_sessions,
     pivot_close_wide,
     sessions_through,
@@ -184,6 +189,106 @@ def price_download_sessions(
 
 
 PRICE_DOWNLOAD_FOLDER = os.path.join("input", "annual")
+# The exogenous variables' cache, apart from the tickers being modeled.
+EXOGENOUS_DOWNLOAD_FOLDER = os.path.join("input", "exogenous")
+
+
+def load_exogenous(
+    tdm: TickerDownloadManager,
+    symbols: tuple[str, ...],
+    *,
+    days_in_past: int,
+    refresh_data: bool,
+    as_of_date: pd.Timestamp | None,
+    sessions: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    """
+    Get the exogenous variables' values (the ARIMAX regressors) for a run,
+    and check them against the sessions the forecasts use.
+
+    1. Today's cached download in EXOGENOUS_DOWNLOAD_FOLDER, or a new one
+       over days_in_past business days, the same range as the tickers'
+       (TickerDownloadManager.get_latest_exogenous()).
+    2. Values after as_of_date are cut off, as for the tickers.
+    3. If the cache lacks a symbol or starts after the first of sessions
+       (for example, one written for a later as-of date), it is downloaded
+       again once. A session missing inside the range is not downloaded
+       again: a new download would normally have the same gap.
+    4. Each symbol's missing sessions are printed. A symbol with no value on
+       any of sessions fails the run.
+
+    Parameters
+    ----------
+    tdm : TickerDownloadManager
+        Downloads and caches the values.
+
+    symbols : tuple[str, ...]
+        The exogenous variables' symbols (ModelingConfig.exogenous_symbols).
+
+    days_in_past : int
+        Business days to download, as for the tickers' download.
+
+    refresh_data : bool
+        If True, download even if today's file is cached.
+
+    as_of_date : pd.Timestamp or None
+        The run's as-of date, or None for the latest session.
+
+    sessions : pd.DatetimeIndex
+        The sessions of the tickers' prices that the forecasts use.
+
+    Returns
+    -------
+    pd.DataFrame
+        The values, one column per symbol (pivot_close_wide()), up to the
+        as-of date.
+
+    Raises
+    ------
+    ValueError
+        If a symbol has no value on any of sessions.
+    """
+
+    def load(use_cache: bool) -> tuple[pd.DataFrame, object, object]:
+        long_df, start, end = tdm.get_latest_exogenous(
+            list(symbols),
+            EXOGENOUS_DOWNLOAD_FOLDER,
+            days_in_past=days_in_past,
+            use_cache=use_cache,
+        )
+        wide = pivot_close_wide(long_df)
+        if as_of_date is not None:
+            wide = sessions_through(wide, as_of_date)
+        return wide, start, end
+
+    first_session = pd.DatetimeIndex(sessions).min().normalize()
+    exogenous_df, start, end = load(use_cache=not refresh_data)
+    covers = (
+        all(symbol in exogenous_df.columns for symbol in symbols)
+        and len(exogenous_df) > 0
+        and exogenous_df.index.min().normalize() <= first_session
+    )
+    if not covers and not refresh_data:
+        print(
+            "Cached exogenous values do not cover every variable from "
+            f"{first_session:%Y-%m-%d}; downloading again."
+        )
+        exogenous_df, start, end = load(use_cache=False)
+    gaps = exogenous_gaps(exogenous_df, list(symbols), sessions)
+    for symbol, missing in gaps.items():
+        if len(missing) == len(sessions):
+            raise ValueError(
+                f"The exogenous variable {symbol} has no value on any of the "
+                f"{len(sessions)} sessions the forecasts use."
+            )
+        if missing:
+            print(
+                f"Warning: the exogenous variable {symbol} has no value on "
+                f"{len(missing)} of the {len(sessions)} sessions the forecasts use "
+                f"(the first on {missing[0]:%Y-%m-%d})."
+            )
+    print(f"Loaded exogenous variables {', '.join(symbols)} from {start} to {end}")
+    return exogenous_df
 
 # Environment variables holding the names of the two top-level folders inside
 # the one frontend S3 bucket. Dev and production share the bucket and differ only
@@ -301,6 +406,7 @@ def run_pipeline(
     as_of_date: pd.Timestamp | None = None,
     cache_date: str | None = None,
     computed_at: str | None = None,
+    exogenous_symbols: tuple[str, ...],
 ) -> PipelineResult:
     """
     Run the whole backend: prices, ARIMA forecasts, portfolio optimization,
@@ -385,6 +491,11 @@ def run_pipeline(
         Defaults to None, the current UTC time when the run starts, as
         YYYY-MM-DDTHH:MM:SSZ; tests pass a fixed value.
 
+    exogenous_symbols : tuple[str, ...]
+        The exogenous variables' symbols from the configuration file
+        (ModelingConfig.exogenous_symbols). Downloaded with the tickers and
+        checked by load_exogenous(). Required, like ts_config.
+
     Returns
     -------
     PipelineResult
@@ -419,6 +530,7 @@ def run_pipeline(
     )
     all_prices = pivot_close_wide(long_df)
     wide_df = _prices_through(all_prices, as_of_date)
+    n_requested = n_download
     if len(wide_df) < n_required:
         # A past as-of date needs the sessions after it too. Counting
         # weekdays up to the latest session overestimates them slightly,
@@ -431,6 +543,7 @@ def run_pipeline(
                 f"Prices cover {len(wide_df)} sessions up to the as-of date, fewer "
                 f"than the {n_required} needed; downloading again."
             )
+            n_requested = n_needed
             long_df, start_date, end_date = tdm.get_latest_tickers(
                 days_in_past=n_needed, use_cache=False
             )
@@ -444,6 +557,18 @@ def run_pipeline(
         )
     _check_as_of_is_a_session(wide_df, as_of_date)
     print(f"Loaded data from {start_date} to {end_date}")
+    # 1b. Exogenous variables (the ARIMAX regressors), downloaded with the
+    # tickers over the same range and cut off at the as-of date like them.
+    # They are checked here, against the sessions the forecasts use; the
+    # ARIMAX forecasts that use them come in a later step.
+    load_exogenous(
+        tdm,
+        exogenous_symbols,
+        days_in_past=n_requested,
+        refresh_data=refresh_data,
+        as_of_date=as_of_date,
+        sessions=last_n_sessions(wide_df, arima_sessions).index,
+    )
     as_of = as_of_date_str(wide_df.index)
     print(f"Results will be stored under {as_of}/")
 
